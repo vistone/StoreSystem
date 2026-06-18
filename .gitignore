@@ -1,0 +1,26 @@
+# Rust 构建产物
+/target
+/client/target
+
+# 运行时数据目录
+/data
+/worker_data
+/master_data
+master_data_logs.db
+
+# 数据库文件
+*.db
+*.db-wal
+*.db-shm
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log

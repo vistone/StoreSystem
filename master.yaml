@@ -1,0 +1,28 @@
+# ============================================================
+# Master 节点配置文件
+# 部署到 Master 机器上使用
+# 启动: ./store_system --config master.yaml
+# ============================================================
+
+# ---------- 运行模式 ----------
+mode: master
+
+# ---------- 全局设置 ----------
+global:
+  # 最大消息大小（字节），默认 256MB
+  max_message_size: 268435456
+  # Master 与 Worker 之间的通讯协议
+  # 可选值: "grpc" | "restful" | "ws" | "both"
+  protocol: "both"
+
+
+# ---------- Master 节点配置 ----------
+master:
+  # Master 监听地址
+  listen_addr: "0.0.0.0:50051"
+  # Meta 数据库路径（存储 Worker 信息和路由表）
+  meta_path: "master_data/master.db"
+  # Worker 心跳超时（秒），超过此时间未收到心跳视为宕机
+  heartbeat_timeout_secs: 30
+  # 清理宕机 Worker 的间隔（秒）
+  cleanup_interval_secs: 60

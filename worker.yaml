@@ -1,0 +1,46 @@
+# ============================================================
+# Worker 节点配置文件
+# 部署到 Worker 机器上使用
+# 启动: ./store_system --config worker.yaml
+# ============================================================
+
+# ---------- 运行模式 ----------
+mode: worker
+
+# ---------- 全局设置 ----------
+global:
+  # 最大消息大小（字节），默认 256MB
+  max_message_size: 268435456
+  # Master 与 Worker 之间的通讯协议
+  # 可选值: "grpc" | "restful" | "ws" | "both"
+  protocol: "both"
+
+
+# ---------- Worker 节点配置 ----------
+worker:
+  # Worker 唯一标识（每台 Worker 机器不同）
+  worker_id: "worker-1"
+  # Worker 监听地址（gRPC 服务）
+  listen_addr: "0.0.0.0:50061"
+  # Master 地址（用于注册和心跳）
+  master_addr: "http://127.0.0.1:50051"
+  # Worker 数据目录（KV 和 Meta 数据库存放目录）
+  data_dir: "worker_data/worker-1"
+  # KV 数据库文件名（不含扩展名）
+  kv_name: "kv"
+  # KV 数据库文件扩展名
+  kv_ext: ".db"
+  # Meta 数据库文件名（不含扩展名）
+  meta_name: "meta"
+  # Meta 数据库文件扩展名
+  meta_ext: ".db"
+  # 缓存大小（每个分片的缓存条目数）
+  cache_size: 10000
+  # 刷盘间隔（毫秒）
+  flush_interval_ms: 5
+  # 心跳间隔（秒）
+  heartbeat_interval_secs: 10
+  # Worker 权重（用于负载均衡）
+  weight: 1
+  # Master WebSocket 地址（用于日志推送）
+  master_ws_addr: "127.0.0.1:50053"

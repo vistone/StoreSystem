@@ -1,0 +1,208 @@
+syntax = "proto3";
+
+package store;
+
+// ============================================================
+// 对外服务接口（客户端 -> Master）
+// ============================================================
+service StoreService {
+  rpc Put(PutRequest) returns (PutResponse);
+  rpc Get(GetRequest) returns (GetResponse);
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+  rpc Exists(ExistsRequest) returns (ExistsResponse);
+  rpc List(ListRequest) returns (ListResponse);
+  rpc PutBatch(PutBatchRequest) returns (PutBatchResponse);
+}
+
+// ============================================================
+// Master 管理接口（Worker -> Master 或 管理工具 -> Master）
+// ============================================================
+service MasterService {
+  // Worker 注册到 Master
+  rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse);
+  // Worker 心跳
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  // 获取所有 Worker 列表
+  rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse);
+  // 获取路由信息（key 对应的 Worker）
+  rpc GetRoute(GetRouteRequest) returns (GetRouteResponse);
+}
+
+// ============================================================
+// 内部存储服务接口（Master -> Worker）
+// ============================================================
+service WorkerService {
+  rpc Put(PutRequest) returns (PutResponse);
+  rpc Get(GetRequest) returns (GetResponse);
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+  rpc Exists(ExistsRequest) returns (ExistsResponse);
+  rpc List(ListRequest) returns (ListResponse);
+  rpc PutBatch(PutBatchRequest) returns (PutBatchResponse);
+}
+
+// ============================================================
+// 消息定义
+// ============================================================
+message ObjectMeta {
+  string key = 1;
+  uint64 size = 2;
+  string created_at = 3;
+  string updated_at = 4;
+  string content_type = 5;
+  string tags = 6; // JSON 格式的标签
+}
+
+message PutRequest {
+  string key = 1;
+  bytes value = 2;
+  string content_type = 3;
+  string tags = 4; // JSON 格式
+}
+
+message PutResponse {
+  ObjectMeta meta = 1;
+}
+
+message GetRequest {
+  string key = 1;
+}
+
+message GetResponse {
+  bytes value = 1;
+  ObjectMeta meta = 2;
+}
+
+message DeleteRequest {
+  string key = 1;
+}
+
+message DeleteResponse {
+  bool success = 1;
+}
+
+message ExistsRequest {
+  string key = 1;
+}
+
+message ExistsResponse {
+  bool exists = 1;
+}
+
+message ListRequest {
+  string prefix = 1;
+  uint32 limit = 2;
+}
+
+message ListResponse {
+  repeated ObjectMeta metas = 1;
+}
+
+message BatchItem {
+  string key = 1;
+  bytes value = 2;
+  string content_type = 3;
+  string tags = 4;
+}
+
+message PutBatchRequest {
+  repeated BatchItem items = 1;
+}
+
+message PutBatchResponse {
+  repeated ObjectMeta metas = 1;
+}
+
+// Worker 注册
+message RegisterWorkerRequest {
+  string worker_id = 1;       // Worker 唯一标识
+  string address = 2;         // Worker 地址，如 "192.168.1.10:50061"
+  int32 weight = 3;           // 权重，用于负载均衡
+  map<string, string> tags = 4; // 自定义标签
+}
+
+message RegisterWorkerResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// Worker 心跳
+message HeartbeatRequest {
+  string worker_id = 1;
+  // Worker 当前状态信息
+  uint64 storage_used_bytes = 2;
+  uint64 storage_capacity_bytes = 3;
+  uint32 active_connections = 4;
+  // ---- 健康监控字段（v0.2.0 新增） ----
+  double storage_usage_ratio = 5;     // 存储使用率 0.0~1.0
+  string disk_health = 6;             // 磁盘健康状态: "Healthy" | "Warning" | "Critical" | "Unknown"
+  uint64 memory_used_bytes = 7;       // 已用内存
+  uint64 memory_total_bytes = 8;      // 总内存
+  double memory_usage_ratio = 9;      // 内存使用率 0.0~1.0
+  double cpu_usage_ratio = 10;        // CPU 使用率 0.0~1.0
+  uint32 cpu_cores = 11;              // CPU 核心数
+  // ---- 写入统计字段（v0.3.0 新增） ----
+  uint64 total_put_count = 12;        // 累计写入操作数
+  uint64 total_put_bytes = 13;        // 累计写入字节数
+  uint64 flushed_count = 14;          // 已刷盘操作数
+  uint64 flushed_bytes = 15;          // 已刷盘字节数
+  uint64 pending_count = 16;          // 待刷盘操作数（缓存中未入库）
+  uint64 pending_bytes = 17;          // 待刷盘字节数
+  double write_rate_per_sec = 18;     // 近期写入速率（ops/sec）
+  double write_bytes_per_sec = 19;    // 近期写入带宽（bytes/sec）
+}
+
+
+message HeartbeatResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// 获取 Worker 列表
+message ListWorkersRequest {
+  // 可选过滤条件
+  bool only_alive = 1;
+}
+
+message WorkerInfo {
+  string worker_id = 1;
+  string address = 2;
+  int32 weight = 3;
+  bool alive = 4;
+  int64 last_heartbeat = 5; // Unix 时间戳
+  uint64 storage_used_bytes = 6;
+  uint64 storage_capacity_bytes = 7;
+  uint32 active_connections = 8;
+  map<string, string> tags = 9;
+  // ---- 健康监控字段（v0.2.0 新增） ----
+  double storage_usage_ratio = 10;     // 存储使用率 0.0~1.0
+  string disk_health = 11;             // 磁盘健康状态
+  uint64 memory_used_bytes = 12;       // 已用内存
+  uint64 memory_total_bytes = 13;      // 总内存
+  double memory_usage_ratio = 14;      // 内存使用率 0.0~1.0
+  double cpu_usage_ratio = 15;         // CPU 使用率 0.0~1.0
+  uint32 cpu_cores = 16;               // CPU 核心数
+  // ---- 写入统计字段（v0.3.0 新增） ----
+  uint64 total_put_count = 17;         // 累计写入操作数
+  uint64 total_put_bytes = 18;         // 累计写入字节数
+  uint64 flushed_count = 19;           // 已刷盘操作数
+  uint64 flushed_bytes = 20;           // 已刷盘字节数
+  uint64 pending_count = 21;           // 待刷盘操作数
+  uint64 pending_bytes = 22;           // 待刷盘字节数
+  double write_rate_per_sec = 23;      // 写入速率 ops/sec
+  double write_bytes_per_sec = 24;     // 写入带宽 bytes/sec
+}
+
+
+message ListWorkersResponse {
+  repeated WorkerInfo workers = 1;
+}
+
+// 路由查询
+message GetRouteRequest {
+  string key = 1;
+}
+
+message GetRouteResponse {
+  string worker_id = 1;
+  string address = 2;
+}

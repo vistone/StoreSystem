@@ -1,0 +1,93 @@
+# ============================================================
+# Store System 全局配置文件
+# 所有配置项均可在此文件中调整，无需修改程序代码
+# ============================================================
+
+# ---------- 运行模式 ----------
+# 可选值: master | worker | standalone
+mode: master
+
+# ---------- 全局设置 ----------
+global:
+  # 最大消息大小（字节），默认 256MB
+  max_message_size: 268435456
+  # Master 与 Worker 之间的通讯协议
+  # 可选值: "grpc" | "restful" | "ws" | "both"
+  # - grpc: 仅使用 gRPC（高性能二进制协议）
+  # - restful: 仅使用 RESTful HTTP（易于调试）
+  # - ws: 仅使用 WebSocket（实时双向通讯）
+  # - both: 同时启动 gRPC 和 RESTful（默认）
+  protocol: "both"
+
+
+# ---------- Master 节点配置 ----------
+master:
+  # Master 监听地址
+  listen_addr: "0.0.0.0:50051"
+  # Meta 数据库路径（存储 Worker 信息和路由表）
+  meta_path: "master_data/master.db"
+  # Worker 心跳超时（秒），超过此时间未收到心跳视为宕机
+  heartbeat_timeout_secs: 30
+  # 清理宕机 Worker 的间隔（秒）
+  cleanup_interval_secs: 60
+
+# ---------- Worker 节点配置 ----------
+worker:
+  # Worker 唯一标识
+  worker_id: "worker-1"
+  # Worker 监听地址（gRPC 服务）
+  listen_addr: "0.0.0.0:50061"
+  # Master 地址（用于注册和心跳）
+  master_addr: "http://127.0.0.1:50051"
+  # Worker 数据目录（KV 和 Meta 数据库存放目录）
+  data_dir: "worker_data/worker-1"
+  # KV 数据库文件名（不含扩展名）
+  kv_name: "kv"
+  # KV 数据库文件扩展名
+  kv_ext: ".db"
+  # Meta 数据库文件名（不含扩展名）
+  meta_name: "meta"
+  # Meta 数据库文件扩展名
+  meta_ext: ".db"
+  # 缓存大小（每个分片的缓存条目数）
+  cache_size: 10000
+  # 刷盘间隔（毫秒）
+  flush_interval_ms: 5
+  # 心跳间隔（秒）
+  heartbeat_interval_secs: 10
+  # Worker 权重（用于负载均衡）
+  weight: 1
+
+# ---------- 单机模式配置 ----------
+standalone:
+  # KV 数据库路径
+  kv_path: "data/kv.db"
+  # Meta 数据库路径
+  meta_path: "data/meta.db"
+  # 缓存大小
+  cache_size: 10000
+  # 刷盘间隔（毫秒）
+  flush_interval_ms: 5
+  # RESTful HTTP 服务端口
+  http_port: 8080
+  # gRPC 服务端口
+  grpc_port: 50051
+
+# ---------- 分片配置（ShardManager 使用） ----------
+shard:
+  # 分片数量
+  num_shards: 4
+  # 数据目录
+  data_dir: "shard_data"
+  # KV 数据库文件名模板（{} 会被替换为分片编号）
+  kv_name_template: "kv_{}"
+  # KV 数据库文件扩展名
+  kv_ext: ".db"
+  # Meta 数据库文件名模板（{} 会被替换为分片编号）
+  meta_name_template: "meta_{}"
+  # Meta 数据库文件扩展名
+  meta_ext: ".db"
+  # 缓存大小（每个分片）
+  cache_size: 10000
+  # 刷盘间隔（毫秒）
+  flush_interval_ms: 5

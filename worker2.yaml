@@ -1,0 +1,25 @@
+# ============================================================
+# Worker 节点配置文件 - Worker 2（测试用）
+# 启动: ./store_system --config worker2.yaml
+# ============================================================
+
+mode: worker
+
+global:
+  max_message_size: 268435456
+  protocol: "both"
+
+worker:
+  worker_id: "worker-2"
+  listen_addr: "0.0.0.0:50062"
+  master_addr: "http://127.0.0.1:50051"
+  data_dir: "worker_data/worker-2"
+  kv_name: "kv"
+  kv_ext: ".db"
+  meta_name: "meta"
+  meta_ext: ".db"
+  cache_size: 10000
+  flush_interval_ms: 5
+  heartbeat_interval_secs: 10
+  weight: 1
+  master_ws_addr: "127.0.0.1:50053"
