@@ -1,14 +1,12 @@
-use bytes::Bytes;
-use serde::{Deserialize, Serialize};
 use crate::error::{Result, StoreError};
 use crate::meta::ObjectMeta;
-use base64::{Engine as _, engine::general_purpose};
+use base64::{engine::general_purpose, Engine as _};
+use bytes::Bytes;
+use serde::{Deserialize, Serialize};
 
 /// Master 通过 RESTful API 调用 Worker 的 HTTP 客户端
 #[derive(Debug, Clone)]
 pub struct WorkerHttpClient {
-
-
     base_url: String,
     client: reqwest::Client,
 }
@@ -77,7 +75,7 @@ impl WorkerHttpClient {
                 .timeout(std::time::Duration::from_secs(30))
                 .connect_timeout(std::time::Duration::from_secs(5))
                 .build()
-                .expect("Failed to create HTTP client"),
+                .unwrap_or_else(|_| reqwest::Client::new()),
         }
     }
 
@@ -98,8 +96,13 @@ impl WorkerHttpClient {
         })
     }
 
-
-    pub async fn put(&self, key: &str, value: Bytes, content_type: Option<&str>, tags: Option<&str>) -> Result<ObjectMeta> {
+    pub async fn put(
+        &self,
+        key: &str,
+        value: Bytes,
+        content_type: Option<&str>,
+        tags: Option<&str>,
+    ) -> Result<ObjectMeta> {
         let url = format!("{}/{}", self.base_url, key);
         let mut req = self.client.post(&url).body(value.to_vec());
 
@@ -110,15 +113,26 @@ impl WorkerHttpClient {
             req = req.query(&[("tags", t)]);
         }
 
-        let resp = req.send().await
+        let resp = req
+            .send()
+            .await
             .map_err(|e| StoreError::InvalidArgument(format!("HTTP 请求失败: {}", e)))?;
 
         if !resp.status().is_success() {
-            let err_text = resp.text().await.unwrap_or_default();
-            return Err(StoreError::InvalidArgument(format!("Worker HTTP 写入失败: {}", err_text)));
+            let status = resp.status();
+            let err_text = resp
+                .text()
+                .await
+                .unwrap_or_else(|_| "[body unreadable]".to_string());
+            return Err(StoreError::InvalidArgument(format!(
+                "Worker HTTP 写入失败 (HTTP {}): {}",
+                status, err_text
+            )));
         }
 
-        let put_resp: PutResponse = resp.json().await
+        let put_resp: PutResponse = resp
+            .json()
+            .await
             .map_err(|e| StoreError::InvalidArgument(format!("响应解析失败: {}", e)))?;
 
         Self::convert_meta_response(put_resp.meta)
@@ -127,21 +141,35 @@ impl WorkerHttpClient {
     pub async fn get(&self, key: &str) -> Result<(Bytes, ObjectMeta)> {
         let url = format!("{}/{}", self.base_url, key);
 
-        let resp = self.client.get(&url).send().await
+        let resp = self
+            .client
+            .get(&url)
+            .send()
+            .await
             .map_err(|e| StoreError::InvalidArgument(format!("HTTP 请求失败: {}", e)))?;
 
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             return Err(StoreError::MetaNotFound(key.to_string()));
         }
         if !resp.status().is_success() {
-            let err_text = resp.text().await.unwrap_or_default();
-            return Err(StoreError::InvalidArgument(format!("Worker HTTP 读取失败: {}", err_text)));
+            let status = resp.status();
+            let err_text = resp
+                .text()
+                .await
+                .unwrap_or_else(|_| "[body unreadable]".to_string());
+            return Err(StoreError::InvalidArgument(format!(
+                "Worker HTTP 读取失败 (HTTP {}): {}",
+                status, err_text
+            )));
         }
 
-        let get_resp: GetResponse = resp.json().await
+        let get_resp: GetResponse = resp
+            .json()
+            .await
             .map_err(|e| StoreError::InvalidArgument(format!("响应解析失败: {}", e)))?;
 
-        let value = general_purpose::STANDARD.decode(&get_resp.value)
+        let value = general_purpose::STANDARD
+            .decode(&get_resp.value)
             .map_err(|e| StoreError::InvalidArgument(format!("Base64 解码失败: {}", e)))?;
 
         let meta = Self::convert_meta_response(get_resp.meta)?;
@@ -151,12 +179,23 @@ impl WorkerHttpClient {
     pub async fn delete(&self, key: &str) -> Result<()> {
         let url = format!("{}/{}", self.base_url, key);
 
-        let resp = self.client.delete(&url).send().await
+        let resp = self
+            .client
+            .delete(&url)
+            .send()
+            .await
             .map_err(|e| StoreError::InvalidArgument(format!("HTTP 请求失败: {}", e)))?;
 
         if !resp.status().is_success() {
-            let err_text = resp.text().await.unwrap_or_default();
-            return Err(StoreError::InvalidArgument(format!("Worker HTTP 删除失败: {}", err_text)));
+            let status = resp.status();
+            let err_text = resp
+                .text()
+                .await
+                .unwrap_or_else(|_| "[body unreadable]".to_string());
+            return Err(StoreError::InvalidArgument(format!(
+                "Worker HTTP 删除失败 (HTTP {}): {}",
+                status, err_text
+            )));
         }
 
         Ok(())
@@ -165,32 +204,57 @@ impl WorkerHttpClient {
     pub async fn exists(&self, key: &str) -> Result<bool> {
         let url = format!("{}/{}/exists", self.base_url, key);
 
-        let resp = self.client.get(&url).send().await
+        let resp = self
+            .client
+            .get(&url)
+            .send()
+            .await
             .map_err(|e| StoreError::InvalidArgument(format!("HTTP 请求失败: {}", e)))?;
 
         if !resp.status().is_success() {
-            let err_text = resp.text().await.unwrap_or_default();
-            return Err(StoreError::InvalidArgument(format!("Worker HTTP 检查失败: {}", err_text)));
+            let status = resp.status();
+            let err_text = resp
+                .text()
+                .await
+                .unwrap_or_else(|_| "[body unreadable]".to_string());
+            return Err(StoreError::InvalidArgument(format!(
+                "Worker HTTP 检查失败 (HTTP {}): {}",
+                status, err_text
+            )));
         }
 
-        let exists_resp: ExistsResponse = resp.json().await
+        let exists_resp: ExistsResponse = resp
+            .json()
+            .await
             .map_err(|e| StoreError::InvalidArgument(format!("响应解析失败: {}", e)))?;
 
         Ok(exists_resp.exists)
     }
 
     pub async fn list(&self, prefix: &str, limit: u32) -> Result<Vec<ObjectMeta>> {
-        let resp = self.client.get(&self.base_url)
+        let resp = self
+            .client
+            .get(&self.base_url)
             .query(&[("prefix", prefix), ("limit", &limit.to_string())])
-            .send().await
+            .send()
+            .await
             .map_err(|e| StoreError::InvalidArgument(format!("HTTP 请求失败: {}", e)))?;
 
         if !resp.status().is_success() {
-            let err_text = resp.text().await.unwrap_or_default();
-            return Err(StoreError::InvalidArgument(format!("Worker HTTP 列出失败: {}", err_text)));
+            let status = resp.status();
+            let err_text = resp
+                .text()
+                .await
+                .unwrap_or_else(|_| "[body unreadable]".to_string());
+            return Err(StoreError::InvalidArgument(format!(
+                "Worker HTTP 列出失败 (HTTP {}): {}",
+                status, err_text
+            )));
         }
 
-        let list_resp: ListResponse = resp.json().await
+        let list_resp: ListResponse = resp
+            .json()
+            .await
             .map_err(|e| StoreError::InvalidArgument(format!("响应解析失败: {}", e)))?;
 
         let mut metas = Vec::with_capacity(list_resp.metas.len());
@@ -201,31 +265,47 @@ impl WorkerHttpClient {
         Ok(metas)
     }
 
-    pub async fn put_batch(&self, items: Vec<(String, Bytes, Option<String>, Option<serde_json::Value>)>) -> Result<Vec<ObjectMeta>> {
+    pub async fn put_batch(
+        &self,
+        items: Vec<(String, Bytes, Option<String>, Option<serde_json::Value>)>,
+    ) -> Result<Vec<ObjectMeta>> {
         let url = format!("{}/batch", self.base_url);
 
-        let batch_items: Vec<BatchItem> = items.into_iter().map(|(key, value, content_type, tags)| {
-            BatchItem {
+        let batch_items: Vec<BatchItem> = items
+            .into_iter()
+            .map(|(key, value, content_type, tags)| BatchItem {
                 key,
                 value: general_purpose::STANDARD.encode(value),
                 content_type,
                 tags,
-            }
-        }).collect();
+            })
+            .collect();
 
         let req = PutBatchRequest { items: batch_items };
 
-        let resp = self.client.post(&url)
+        let resp = self
+            .client
+            .post(&url)
             .json(&req)
-            .send().await
+            .send()
+            .await
             .map_err(|e| StoreError::InvalidArgument(format!("HTTP 请求失败: {}", e)))?;
 
         if !resp.status().is_success() {
-            let err_text = resp.text().await.unwrap_or_default();
-            return Err(StoreError::InvalidArgument(format!("Worker HTTP 批量写入失败: {}", err_text)));
+            let status = resp.status();
+            let err_text = resp
+                .text()
+                .await
+                .unwrap_or_else(|_| "[body unreadable]".to_string());
+            return Err(StoreError::InvalidArgument(format!(
+                "Worker HTTP 批量写入失败 (HTTP {}): {}",
+                status, err_text
+            )));
         }
 
-        let list_resp: ListResponse = resp.json().await
+        let list_resp: ListResponse = resp
+            .json()
+            .await
             .map_err(|e| StoreError::InvalidArgument(format!("响应解析失败: {}", e)))?;
 
         let mut metas = Vec::with_capacity(list_resp.metas.len());

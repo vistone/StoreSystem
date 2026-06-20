@@ -1,14 +1,14 @@
+use crate::error::{Result, StoreError};
+use crate::meta::ObjectMeta;
+use base64::{engine::general_purpose, Engine as _};
 use bytes::Bytes;
+use futures_util::SinkExt;
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
-use futures_util::StreamExt;
-use futures_util::SinkExt;
-use crate::error::{Result, StoreError};
-use crate::meta::ObjectMeta;
-use base64::{Engine as _, engine::general_purpose};
 
 // ============================================================
 // WebSocket 消息协议（与 worker_ws.rs 保持一致）
@@ -96,8 +96,21 @@ impl std::fmt::Debug for WorkerWsClient {
 // WsConnection 不实现 Debug，因为 SplitSink/SplitStream 不实现 Debug
 // 但 WorkerWsClient 需要 Debug，所以用 manual impl
 struct WsConnection {
-    writer: futures_util::stream::SplitSink<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, Message>,
-    reader: Arc<Mutex<futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>>>,
+    writer: futures_util::stream::SplitSink<
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        Message,
+    >,
+    reader: Arc<
+        Mutex<
+            futures_util::stream::SplitStream<
+                tokio_tungstenite::WebSocketStream<
+                    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+                >,
+            >,
+        >,
+    >,
 }
 
 impl WorkerWsClient {
@@ -138,13 +151,16 @@ impl WorkerWsClient {
         self.ensure_connected().await?;
 
         let mut guard = self.connection.lock().await;
-        let conn = guard.as_mut().unwrap();
+        let conn = guard
+            .as_mut()
+            .ok_or_else(|| StoreError::InvalidArgument("WS 连接未初始化".to_string()))?;
 
         let request_text = serde_json::to_string(&request)
             .map_err(|e| StoreError::InvalidArgument(format!("请求序列化失败: {}", e)))?;
 
         // 发送请求
-        conn.writer.send(Message::Text(request_text.into()))
+        conn.writer
+            .send(Message::Text(request_text))
             .await
             .map_err(|e| StoreError::InvalidArgument(format!("WS 发送失败: {}", e)))?;
 
@@ -178,26 +194,49 @@ impl WorkerWsClient {
     }
 
     fn convert_meta_response(data: &serde_json::Value) -> Result<ObjectMeta> {
+        let key = data["key"]
+            .as_str()
+            .ok_or_else(|| StoreError::InvalidArgument("响应缺少 key 字段".to_string()))?
+            .to_string();
+
+        let created_at_str = data["created_at"]
+            .as_str()
+            .ok_or_else(|| StoreError::InvalidArgument("响应缺少 created_at 字段".to_string()))?;
+        let created_at = chrono::DateTime::parse_from_rfc3339(created_at_str)
+            .map_err(|e| StoreError::InvalidArgument(format!("created_at 时间解析失败: {}", e)))?
+            .with_timezone(&chrono::Utc);
+
+        let updated_at_str = data["updated_at"]
+            .as_str()
+            .ok_or_else(|| StoreError::InvalidArgument("响应缺少 updated_at 字段".to_string()))?;
+        let updated_at = chrono::DateTime::parse_from_rfc3339(updated_at_str)
+            .map_err(|e| StoreError::InvalidArgument(format!("updated_at 时间解析失败: {}", e)))?
+            .with_timezone(&chrono::Utc);
+
         Ok(ObjectMeta {
-            key: data["key"].as_str().unwrap_or_default().to_string(),
+            key,
             size: data["size"].as_u64().unwrap_or(0),
-            created_at: chrono::DateTime::parse_from_rfc3339(data["created_at"].as_str().unwrap_or(""))
-                .map_err(|e| StoreError::InvalidArgument(format!("时间解析失败: {}", e)))?
-                .with_timezone(&chrono::Utc),
-            updated_at: chrono::DateTime::parse_from_rfc3339(data["updated_at"].as_str().unwrap_or(""))
-                .map_err(|e| StoreError::InvalidArgument(format!("时间解析失败: {}", e)))?
-                .with_timezone(&chrono::Utc),
+            created_at,
+            updated_at,
             content_type: data["content_type"].as_str().map(|s| s.to_string()),
-            tags: if data["tags"].is_null() { None } else { Some(data["tags"].clone()) },
+            tags: if data["tags"].is_null() {
+                None
+            } else {
+                Some(data["tags"].clone())
+            },
             checksum: None,
             storage_node: None,
         })
     }
 
-
-    pub async fn put(&self, key: &str, value: Bytes, content_type: Option<&str>, tags: Option<&str>) -> Result<ObjectMeta> {
-        let tags_value: Option<serde_json::Value> = tags
-            .and_then(|t| serde_json::from_str(t).ok());
+    pub async fn put(
+        &self,
+        key: &str,
+        value: Bytes,
+        content_type: Option<&str>,
+        tags: Option<&str>,
+    ) -> Result<ObjectMeta> {
+        let tags_value: Option<serde_json::Value> = tags.and_then(|t| serde_json::from_str(t).ok());
 
         let request = WsRequest::Put(PutPayload {
             key: key.to_string(),
@@ -205,7 +244,6 @@ impl WorkerWsClient {
             content_type: content_type.map(|s| s.to_string()),
             tags: tags_value,
         });
-
 
         let data = self.send_request(request).await?;
         let meta_data = &data["meta"];
@@ -219,9 +257,12 @@ impl WorkerWsClient {
 
         let data = self.send_request(request).await?;
 
-        let value = general_purpose::STANDARD.decode(
-            data["value"].as_str().unwrap_or("")
-        ).map_err(|e| StoreError::InvalidArgument(format!("Base64 解码失败: {}", e)))?;
+        let value =
+            general_purpose::STANDARD
+                .decode(data["value"].as_str().ok_or_else(|| {
+                    StoreError::InvalidArgument("响应缺少 value 字段".to_string())
+                })?)
+                .map_err(|e| StoreError::InvalidArgument(format!("Base64 解码失败: {}", e)))?;
 
         let meta = Self::convert_meta_response(&data["meta"])?;
         Ok((Bytes::from(value), meta))
@@ -252,9 +293,9 @@ impl WorkerWsClient {
         });
 
         let data = self.send_request(request).await?;
-        let metas_data = data["metas"].as_array().ok_or_else(|| {
-            StoreError::InvalidArgument("无效的 metas 响应".to_string())
-        })?;
+        let metas_data = data["metas"]
+            .as_array()
+            .ok_or_else(|| StoreError::InvalidArgument("无效的 metas 响应".to_string()))?;
 
         let mut metas = Vec::with_capacity(metas_data.len());
         for m in metas_data {
@@ -264,24 +305,26 @@ impl WorkerWsClient {
         Ok(metas)
     }
 
-    pub async fn put_batch(&self, items: Vec<(String, Bytes, Option<String>, Option<serde_json::Value>)>) -> Result<Vec<ObjectMeta>> {
-        let batch_items: Vec<BatchItem> = items.into_iter().map(|(key, value, content_type, tags)| {
-            BatchItem {
+    pub async fn put_batch(
+        &self,
+        items: Vec<(String, Bytes, Option<String>, Option<serde_json::Value>)>,
+    ) -> Result<Vec<ObjectMeta>> {
+        let batch_items: Vec<BatchItem> = items
+            .into_iter()
+            .map(|(key, value, content_type, tags)| BatchItem {
                 key,
                 value: general_purpose::STANDARD.encode(value),
                 content_type,
                 tags,
-            }
-        }).collect();
+            })
+            .collect();
 
-        let request = WsRequest::PutBatch(PutBatchPayload {
-            items: batch_items,
-        });
+        let request = WsRequest::PutBatch(PutBatchPayload { items: batch_items });
 
         let data = self.send_request(request).await?;
-        let metas_data = data["metas"].as_array().ok_or_else(|| {
-            StoreError::InvalidArgument("无效的 metas 响应".to_string())
-        })?;
+        let metas_data = data["metas"]
+            .as_array()
+            .ok_or_else(|| StoreError::InvalidArgument("无效的 metas 响应".to_string()))?;
 
         let mut metas = Vec::with_capacity(metas_data.len());
         for m in metas_data {

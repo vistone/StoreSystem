@@ -1,13 +1,13 @@
+use crate::worker::WorkerNode;
 use bytes::Bytes;
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
-use futures_util::StreamExt;
-use crate::worker::WorkerNode;
 
-use base64::{Engine as _, engine::general_purpose};
+use base64::{engine::general_purpose, Engine as _};
 
 // ============================================================
 // WebSocket 消息协议定义
@@ -97,7 +97,10 @@ fn convert_meta(meta: crate::meta::ObjectMeta) -> ObjectMetaResponse {
 }
 
 /// 处理单个 WebSocket 连接
-async fn handle_connection(stream: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>, node: Arc<WorkerNode>) {
+async fn handle_connection(
+    stream: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+    node: Arc<WorkerNode>,
+) {
     let (write, mut read) = stream.split();
 
     // 使用一个 channel 来发送消息
@@ -120,14 +123,14 @@ async fn handle_connection(stream: tokio_tungstenite::WebSocketStream<tokio::net
             Ok(Message::Text(text)) => {
                 let response = process_message(&text, &node).await;
                 let response_text = serde_json::to_string(&response).unwrap_or_default();
-                let _ = tx.send(Message::Text(response_text.into()));
+                let _ = tx.send(Message::Text(response_text));
             }
             Ok(Message::Binary(data)) => {
                 // 支持二进制消息（直接作为 value 处理）
                 if let Ok(text) = String::from_utf8(data.to_vec()) {
                     let response = process_message(&text, &node).await;
                     let response_text = serde_json::to_string(&response).unwrap_or_default();
-                    let _ = tx.send(Message::Text(response_text.into()));
+                    let _ = tx.send(Message::Text(response_text));
                 }
             }
             Ok(Message::Close(_)) => break,
@@ -157,7 +160,11 @@ async fn process_message(text: &str, node: &WorkerNode) -> WsResponse {
         WsRequest::Put(payload) => {
             let value = match general_purpose::STANDARD.decode(&payload.value) {
                 Ok(v) => Bytes::from(v),
-                Err(e) => return WsResponse::Error { message: format!("Base64 解码失败: {}", e) },
+                Err(e) => {
+                    return WsResponse::Error {
+                        message: format!("Base64 解码失败: {}", e),
+                    }
+                }
             };
 
             let now = chrono::Utc::now();
@@ -168,13 +175,17 @@ async fn process_message(text: &str, node: &WorkerNode) -> WsResponse {
                 updated_at: now,
                 content_type: payload.content_type,
                 tags: payload.tags,
-        checksum: None,
-        storage_node: None,
-    };
+                checksum: None,
+                storage_node: None,
+            };
 
             match node.put_object(&payload.key, value, meta.clone()) {
                 Ok(_) => {}
-                Err(e) => return WsResponse::Error { message: e.to_string() },
+                Err(e) => {
+                    return WsResponse::Error {
+                        message: e.to_string(),
+                    }
+                }
             }
 
             WsResponse::Ok {
@@ -187,8 +198,16 @@ async fn process_message(text: &str, node: &WorkerNode) -> WsResponse {
         WsRequest::Get(payload) => {
             let (value, meta) = match node.get_object(&payload.key) {
                 Ok(Some(v)) => v,
-                Ok(None) => return WsResponse::Error { message: "Key not found".to_string() },
-                Err(e) => return WsResponse::Error { message: e.to_string() },
+                Ok(None) => {
+                    return WsResponse::Error {
+                        message: "Key not found".to_string(),
+                    }
+                }
+                Err(e) => {
+                    return WsResponse::Error {
+                        message: e.to_string(),
+                    }
+                }
             };
 
             WsResponse::Ok {
@@ -201,7 +220,9 @@ async fn process_message(text: &str, node: &WorkerNode) -> WsResponse {
 
         WsRequest::Delete(payload) => {
             if let Err(e) = node.delete_object(&payload.key) {
-                return WsResponse::Error { message: e.to_string() };
+                return WsResponse::Error {
+                    message: e.to_string(),
+                };
             }
 
             WsResponse::Ok {
@@ -212,7 +233,11 @@ async fn process_message(text: &str, node: &WorkerNode) -> WsResponse {
         WsRequest::Exists(payload) => {
             let exists = match node.meta_exists(&payload.key) {
                 Ok(e) => e,
-                Err(e) => return WsResponse::Error { message: e.to_string() },
+                Err(e) => {
+                    return WsResponse::Error {
+                        message: e.to_string(),
+                    }
+                }
             };
 
             WsResponse::Ok {
@@ -226,10 +251,15 @@ async fn process_message(text: &str, node: &WorkerNode) -> WsResponse {
 
             let metas = match node.list_meta(&prefix, limit) {
                 Ok(m) => m,
-                Err(e) => return WsResponse::Error { message: e.to_string() },
+                Err(e) => {
+                    return WsResponse::Error {
+                        message: e.to_string(),
+                    }
+                }
             };
 
-            let response_metas: Vec<ObjectMetaResponse> = metas.into_iter().map(convert_meta).collect();
+            let response_metas: Vec<ObjectMetaResponse> =
+                metas.into_iter().map(convert_meta).collect();
 
             WsResponse::Ok {
                 data: serde_json::json!({"metas": response_metas}),
@@ -244,7 +274,11 @@ async fn process_message(text: &str, node: &WorkerNode) -> WsResponse {
             for item in payload.items {
                 let value = match general_purpose::STANDARD.decode(&item.value) {
                     Ok(v) => Bytes::from(v),
-                    Err(e) => return WsResponse::Error { message: format!("Base64 解码失败: {}", e) },
+                    Err(e) => {
+                        return WsResponse::Error {
+                            message: format!("Base64 解码失败: {}", e),
+                        }
+                    }
                 };
 
                 let meta = crate::meta::ObjectMeta {
@@ -254,19 +288,22 @@ async fn process_message(text: &str, node: &WorkerNode) -> WsResponse {
                     updated_at: now,
                     content_type: item.content_type,
                     tags: item.tags,
-        checksum: None,
-        storage_node: None,
-    };
+                    checksum: None,
+                    storage_node: None,
+                };
 
                 metas.push(meta.clone());
                 items.push((item.key, value, meta));
             }
 
             if let Err(e) = node.put_objects_batch(items) {
-                return WsResponse::Error { message: e.to_string() };
+                return WsResponse::Error {
+                    message: e.to_string(),
+                };
             }
 
-            let response_metas: Vec<ObjectMetaResponse> = metas.into_iter().map(convert_meta).collect();
+            let response_metas: Vec<ObjectMetaResponse> =
+                metas.into_iter().map(convert_meta).collect();
 
             WsResponse::Ok {
                 data: serde_json::json!({"metas": response_metas}),

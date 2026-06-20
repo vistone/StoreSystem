@@ -1,9 +1,9 @@
+use crate::error::Result;
 use bytes::Bytes;
 use jammdb::DB;
 use std::fmt;
 use std::path::Path;
 use std::sync::Mutex;
-use crate::error::Result;
 
 const BUCKET_NAME: &str = "objects";
 

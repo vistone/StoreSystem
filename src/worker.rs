@@ -1,19 +1,19 @@
+use crate::error::Result;
 use bytes::Bytes;
 use chrono::Utc;
 use dashmap::DashMap;
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Notify;
 use tonic::{Request, Response, Status};
-use crate::error::Result;
 
+use crate::grpc::proto;
 use crate::kv::KvStore;
 use crate::meta::{MetaStore, ObjectMeta};
-use crate::shard::{ShardManager, ShardConfig};
-use crate::grpc::proto;
+use crate::shard::{ShardConfig, ShardManager};
 
 /// Worker 节点配置
 #[derive(Debug, Clone)]
@@ -185,8 +185,10 @@ impl WriteStats {
 
             // 重置窗口
             *start = Instant::now();
-            self.rate_window_start_count.store(total_put_count, Ordering::Relaxed);
-            self.rate_window_start_bytes.store(total_put_bytes, Ordering::Relaxed);
+            self.rate_window_start_count
+                .store(total_put_count, Ordering::Relaxed);
+            self.rate_window_start_bytes
+                .store(total_put_bytes, Ordering::Relaxed);
             (rate, byte_rate)
         };
 
@@ -206,7 +208,10 @@ impl WriteStats {
 impl std::fmt::Debug for WriteStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WriteStats")
-            .field("total_put_count", &self.total_put_count.load(Ordering::Relaxed))
+            .field(
+                "total_put_count",
+                &self.total_put_count.load(Ordering::Relaxed),
+            )
             .field("flushed_count", &self.flushed_count.load(Ordering::Relaxed))
             .finish()
     }
@@ -279,16 +284,19 @@ impl WriteBuffer {
 
     fn drain(&self) -> HashMap<String, PendingOp> {
         // 取出当前所有 pending 数据
-        let items: Vec<(String, PendingOp)> = self.pending.iter()
+        let items: Vec<(String, PendingOp)> = self
+            .pending
+            .iter()
             .map(|r| (r.key().clone(), r.value().clone()))
             .collect();
-        let drained_count = items.len() as u64;
-        let drained_bytes: u64 = items.iter().map(|(_, op)| {
-            match op {
+        let _drained_count = items.len() as u64;
+        let _drained_bytes: u64 = items
+            .iter()
+            .map(|(_, op)| match op {
                 PendingOp::Put { value, .. } => value.len() as u64,
                 PendingOp::Delete => 0,
-            }
-        }).sum();
+            })
+            .sum();
 
         // 移除已 drain 的 key（而不是 clear，避免清除 drain 期间新写入的数据）
         for (key, _) in &items {
@@ -298,10 +306,13 @@ impl WriteBuffer {
         // 重新基于 map 实际大小设置计数器
         // 这样 drain 期间新写入的数据会被正确计数
         let actual_remaining = self.pending.len() as u64;
-        self.pending_count.store(actual_remaining, Ordering::Release);
+        self.pending_count
+            .store(actual_remaining, Ordering::Release);
 
         // 重新计算剩余 bytes
-        let actual_bytes: u64 = self.pending.iter()
+        let actual_bytes: u64 = self
+            .pending
+            .iter()
             .map(|r| match r.value() {
                 PendingOp::Put { value, .. } => value.len() as u64,
                 PendingOp::Delete => 0,
@@ -316,6 +327,7 @@ impl WriteBuffer {
         self.pending_count.load(Ordering::Relaxed)
     }
 
+    #[allow(dead_code)]
     fn pending_bytes(&self) -> u64 {
         self.pending_bytes.load(Ordering::Relaxed)
     }
@@ -426,7 +438,10 @@ impl WorkerNode {
                         let ops_count = ops.len();
                         let (count, bytes) = flush_ops(&kv, &meta, ops, &stats);
                         if count != ops_count as u64 {
-                            eprintln!("[flusher] 刷盘完成 {}/{} 条, {} 字节", count, ops_count, bytes);
+                            eprintln!(
+                                "[flusher] 刷盘完成 {}/{} 条, {} 字节",
+                                count, ops_count, bytes
+                            );
                         }
                         stats.record_flush(count, bytes);
                         wb.flushing.store(false, Ordering::Release);
@@ -452,7 +467,6 @@ impl WorkerNode {
         })
     }
 
-
     // ========== KV 操作 ==========
 
     /// 写入对象（KV + Meta 一起缓冲，后台刷盘）
@@ -471,7 +485,9 @@ impl WorkerNode {
             self.write_stats.record_flush(1, byte_len);
             Ok(())
         } else {
-            Err(crate::error::StoreError::InvalidArgument("Worker 未初始化".to_string()))
+            Err(crate::error::StoreError::InvalidArgument(
+                "Worker 未初始化".to_string(),
+            ))
         }
     }
 
@@ -503,7 +519,9 @@ impl WorkerNode {
             self.write_stats.record_flush(count, total_bytes);
             Ok(())
         } else {
-            Err(crate::error::StoreError::InvalidArgument("Worker 未初始化".to_string()))
+            Err(crate::error::StoreError::InvalidArgument(
+                "Worker 未初始化".to_string(),
+            ))
         }
     }
 
@@ -567,7 +585,9 @@ impl WorkerNode {
         } else if let Some(kv) = &self.kv_store {
             kv.put(key, value)
         } else {
-            Err(crate::error::StoreError::InvalidArgument("Worker 未初始化".to_string()))
+            Err(crate::error::StoreError::InvalidArgument(
+                "Worker 未初始化".to_string(),
+            ))
         }
     }
 
@@ -579,7 +599,9 @@ impl WorkerNode {
         } else if let Some(kv) = &self.kv_store {
             kv.get(key)
         } else {
-            Err(crate::error::StoreError::InvalidArgument("Worker 未初始化".to_string()))
+            Err(crate::error::StoreError::InvalidArgument(
+                "Worker 未初始化".to_string(),
+            ))
         }
     }
 
@@ -591,7 +613,9 @@ impl WorkerNode {
         } else if let Some(kv) = &self.kv_store {
             kv.delete(key)
         } else {
-            Err(crate::error::StoreError::InvalidArgument("Worker 未初始化".to_string()))
+            Err(crate::error::StoreError::InvalidArgument(
+                "Worker 未初始化".to_string(),
+            ))
         }
     }
 
@@ -609,7 +633,9 @@ impl WorkerNode {
         } else if let Some(kv) = &self.kv_store {
             kv.exists(key)
         } else {
-            Err(crate::error::StoreError::InvalidArgument("Worker 未初始化".to_string()))
+            Err(crate::error::StoreError::InvalidArgument(
+                "Worker 未初始化".to_string(),
+            ))
         }
     }
 
@@ -629,7 +655,9 @@ impl WorkerNode {
         } else if let Some(kv) = &self.kv_store {
             kv.scan(prefix, limit)
         } else {
-            Err(crate::error::StoreError::InvalidArgument("Worker 未初始化".to_string()))
+            Err(crate::error::StoreError::InvalidArgument(
+                "Worker 未初始化".to_string(),
+            ))
         }
     }
 
@@ -651,7 +679,9 @@ impl WorkerNode {
         } else if let Some(kv) = &self.kv_store {
             kv.put_batch(kvs)
         } else {
-            Err(crate::error::StoreError::InvalidArgument("Worker 未初始化".to_string()))
+            Err(crate::error::StoreError::InvalidArgument(
+                "Worker 未初始化".to_string(),
+            ))
         }
     }
 
@@ -672,7 +702,9 @@ impl WorkerNode {
         } else if let Some(kv) = &self.kv_store {
             kv.delete_batch(keys)
         } else {
-            Err(crate::error::StoreError::InvalidArgument("Worker 未初始化".to_string()))
+            Err(crate::error::StoreError::InvalidArgument(
+                "Worker 未初始化".to_string(),
+            ))
         }
     }
 
@@ -686,7 +718,9 @@ impl WorkerNode {
         } else if let Some(meta_store) = &self.meta_store {
             meta_store.put(meta)
         } else {
-            Err(crate::error::StoreError::InvalidArgument("Worker 未初始化".to_string()))
+            Err(crate::error::StoreError::InvalidArgument(
+                "Worker 未初始化".to_string(),
+            ))
         }
     }
 
@@ -698,7 +732,9 @@ impl WorkerNode {
         } else if let Some(meta_store) = &self.meta_store {
             meta_store.get(key)
         } else {
-            Err(crate::error::StoreError::InvalidArgument("Worker 未初始化".to_string()))
+            Err(crate::error::StoreError::InvalidArgument(
+                "Worker 未初始化".to_string(),
+            ))
         }
     }
 
@@ -710,7 +746,9 @@ impl WorkerNode {
         } else if let Some(meta_store) = &self.meta_store {
             meta_store.delete(key)
         } else {
-            Err(crate::error::StoreError::InvalidArgument("Worker 未初始化".to_string()))
+            Err(crate::error::StoreError::InvalidArgument(
+                "Worker 未初始化".to_string(),
+            ))
         }
     }
 
@@ -722,7 +760,9 @@ impl WorkerNode {
         } else if let Some(meta_store) = &self.meta_store {
             meta_store.exists(key)
         } else {
-            Err(crate::error::StoreError::InvalidArgument("Worker 未初始化".to_string()))
+            Err(crate::error::StoreError::InvalidArgument(
+                "Worker 未初始化".to_string(),
+            ))
         }
     }
 
@@ -745,7 +785,9 @@ impl WorkerNode {
         } else if let Some(meta_store) = &self.meta_store {
             meta_store.list(prefix, limit)
         } else {
-            Err(crate::error::StoreError::InvalidArgument("Worker 未初始化".to_string()))
+            Err(crate::error::StoreError::InvalidArgument(
+                "Worker 未初始化".to_string(),
+            ))
         }
     }
 
@@ -766,7 +808,9 @@ impl WorkerNode {
         } else if let Some(meta_store) = &self.meta_store {
             meta_store.put_batch_txn(metas)
         } else {
-            Err(crate::error::StoreError::InvalidArgument("Worker 未初始化".to_string()))
+            Err(crate::error::StoreError::InvalidArgument(
+                "Worker 未初始化".to_string(),
+            ))
         }
     }
 
@@ -787,7 +831,9 @@ impl WorkerNode {
         } else if let Some(meta_store) = &self.meta_store {
             meta_store.delete_batch_txn(keys)
         } else {
-            Err(crate::error::StoreError::InvalidArgument("Worker 未初始化".to_string()))
+            Err(crate::error::StoreError::InvalidArgument(
+                "Worker 未初始化".to_string(),
+            ))
         }
     }
 }
@@ -810,7 +856,10 @@ fn flush_ops(
 
     for (key, op) in ops {
         match op {
-            PendingOp::Put { value, meta: obj_meta } => {
+            PendingOp::Put {
+                value,
+                meta: obj_meta,
+            } => {
                 bytes += value.len() as u64;
                 put_kvs.push((key, value));
                 put_metas.push(obj_meta);
@@ -858,7 +907,6 @@ fn flush_ops(
     (count, bytes)
 }
 
-
 /// Worker gRPC 服务实现
 #[derive(Debug, Clone)]
 pub struct WorkerService {
@@ -873,9 +921,7 @@ impl WorkerService {
     }
 
     pub fn new_arc(node: Arc<WorkerNode>) -> Self {
-        Self {
-            node,
-        }
+        Self { node }
     }
 
     fn convert_meta(meta: ObjectMeta) -> proto::ObjectMeta {
@@ -886,13 +932,16 @@ impl WorkerService {
             updated_at: meta.updated_at.to_rfc3339(),
             content_type: meta.content_type.unwrap_or_default(),
             tags: meta.tags.map(|t| t.to_string()).unwrap_or_default(),
-    }
+        }
     }
 }
 
 #[tonic::async_trait]
 impl proto::worker_service_server::WorkerService for WorkerService {
-    async fn put(&self, request: Request<proto::PutRequest>) -> std::result::Result<Response<proto::PutResponse>, Status> {
+    async fn put(
+        &self,
+        request: Request<proto::PutRequest>,
+    ) -> std::result::Result<Response<proto::PutResponse>, Status> {
         let req = request.into_inner();
         let value = Bytes::from(req.value);
 
@@ -902,24 +951,41 @@ impl proto::worker_service_server::WorkerService for WorkerService {
             size: value.len() as u64,
             created_at: now,
             updated_at: now,
-            content_type: if req.content_type.is_empty() { None } else { Some(req.content_type) },
-            tags: if req.tags.is_empty() { None } else { Some(serde_json::from_str(&req.tags).map_err(|e| Status::invalid_argument(format!("Invalid tags: {}", e)))?) },
+            content_type: if req.content_type.is_empty() {
+                None
+            } else {
+                Some(req.content_type)
+            },
+            tags: if req.tags.is_empty() {
+                None
+            } else {
+                Some(
+                    serde_json::from_str(&req.tags)
+                        .map_err(|e| Status::invalid_argument(format!("Invalid tags: {}", e)))?,
+                )
+            },
             checksum: None,
             storage_node: None,
         };
 
-
-        self.node.put_object(&req.key, value, meta.clone()).map_err(|e| Status::internal(e.to_string()))?;
+        self.node
+            .put_object(&req.key, value, meta.clone())
+            .map_err(|e| Status::internal(e.to_string()))?;
 
         Ok(Response::new(proto::PutResponse {
             meta: Some(Self::convert_meta(meta)),
         }))
     }
 
-    async fn get(&self, request: Request<proto::GetRequest>) -> std::result::Result<Response<proto::GetResponse>, Status> {
+    async fn get(
+        &self,
+        request: Request<proto::GetRequest>,
+    ) -> std::result::Result<Response<proto::GetResponse>, Status> {
         let req = request.into_inner();
 
-        let (value, meta) = self.node.get_object(&req.key)
+        let (value, meta) = self
+            .node
+            .get_object(&req.key)
             .map_err(|e| Status::internal(e.to_string()))?
             .ok_or_else(|| Status::not_found(format!("Key not found: {}", req.key)))?;
 
@@ -929,26 +995,42 @@ impl proto::worker_service_server::WorkerService for WorkerService {
         }))
     }
 
-    async fn delete(&self, request: Request<proto::DeleteRequest>) -> std::result::Result<Response<proto::DeleteResponse>, Status> {
+    async fn delete(
+        &self,
+        request: Request<proto::DeleteRequest>,
+    ) -> std::result::Result<Response<proto::DeleteResponse>, Status> {
         let req = request.into_inner();
 
-        self.node.delete_object(&req.key).map_err(|e| Status::internal(e.to_string()))?;
+        self.node
+            .delete_object(&req.key)
+            .map_err(|e| Status::internal(e.to_string()))?;
 
         Ok(Response::new(proto::DeleteResponse { success: true }))
     }
 
-    async fn exists(&self, request: Request<proto::ExistsRequest>) -> std::result::Result<Response<proto::ExistsResponse>, Status> {
+    async fn exists(
+        &self,
+        request: Request<proto::ExistsRequest>,
+    ) -> std::result::Result<Response<proto::ExistsResponse>, Status> {
         let req = request.into_inner();
 
-        let exists = self.node.meta_exists(&req.key).map_err(|e| Status::internal(e.to_string()))?;
+        let exists = self
+            .node
+            .meta_exists(&req.key)
+            .map_err(|e| Status::internal(e.to_string()))?;
 
         Ok(Response::new(proto::ExistsResponse { exists }))
     }
 
-    async fn list(&self, request: Request<proto::ListRequest>) -> std::result::Result<Response<proto::ListResponse>, Status> {
+    async fn list(
+        &self,
+        request: Request<proto::ListRequest>,
+    ) -> std::result::Result<Response<proto::ListResponse>, Status> {
         let req = request.into_inner();
 
-        let metas = self.node.list_meta(&req.prefix, req.limit as usize)
+        let metas = self
+            .node
+            .list_meta(&req.prefix, req.limit as usize)
             .map_err(|e| Status::internal(e.to_string()))?;
 
         let proto_metas = metas.into_iter().map(Self::convert_meta).collect();
@@ -956,7 +1038,10 @@ impl proto::worker_service_server::WorkerService for WorkerService {
         Ok(Response::new(proto::ListResponse { metas: proto_metas }))
     }
 
-    async fn put_batch(&self, request: Request<proto::PutBatchRequest>) -> std::result::Result<Response<proto::PutBatchResponse>, Status> {
+    async fn put_batch(
+        &self,
+        request: Request<proto::PutBatchRequest>,
+    ) -> std::result::Result<Response<proto::PutBatchResponse>, Status> {
         let req = request.into_inner();
         let now = Utc::now();
 
@@ -965,25 +1050,39 @@ impl proto::worker_service_server::WorkerService for WorkerService {
 
         for item in req.items {
             let value = Bytes::from(item.value);
-            let meta = ObjectMeta {
-                key: item.key.clone(),
-                size: value.len() as u64,
-                created_at: now,
-                updated_at: now,
-                content_type: if item.content_type.is_empty() { None } else { Some(item.content_type) },
-                tags: if item.tags.is_empty() { None } else { Some(serde_json::from_str(&item.tags).map_err(|e| Status::invalid_argument(format!("Invalid tags: {}", e)))?) },
-                checksum: None,
-                storage_node: None,
-            };
+            let meta =
+                ObjectMeta {
+                    key: item.key.clone(),
+                    size: value.len() as u64,
+                    created_at: now,
+                    updated_at: now,
+                    content_type: if item.content_type.is_empty() {
+                        None
+                    } else {
+                        Some(item.content_type)
+                    },
+                    tags: if item.tags.is_empty() {
+                        None
+                    } else {
+                        Some(serde_json::from_str(&item.tags).map_err(|e| {
+                            Status::invalid_argument(format!("Invalid tags: {}", e))
+                        })?)
+                    },
+                    checksum: None,
+                    storage_node: None,
+                };
             metas.push(meta.clone());
             items.push((item.key, value, meta));
         }
 
-
-        self.node.put_objects_batch(items).map_err(|e| Status::internal(e.to_string()))?;
+        self.node
+            .put_objects_batch(items)
+            .map_err(|e| Status::internal(e.to_string()))?;
 
         let proto_metas = metas.into_iter().map(Self::convert_meta).collect();
 
-        Ok(Response::new(proto::PutBatchResponse { metas: proto_metas }))
+        Ok(Response::new(proto::PutBatchResponse {
+            metas: proto_metas,
+        }))
     }
 }

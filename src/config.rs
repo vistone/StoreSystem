@@ -69,7 +69,6 @@ impl Default for GlobalConfig {
     }
 }
 
-
 // ============================================================
 // Master 节点配置
 // ============================================================
@@ -410,7 +409,10 @@ impl AppConfig {
     pub fn from_file(path: impl AsRef<Path>) -> Self {
         let path = path.as_ref();
         if !path.exists() {
-            eprintln!("[Config] 配置文件 '{}' 不存在，使用默认配置", path.display());
+            eprintln!(
+                "[Config] 配置文件 '{}' 不存在，使用默认配置",
+                path.display()
+            );
             return Self::default();
         }
 
@@ -431,9 +433,13 @@ impl AppConfig {
             }
         }
     }
+}
 
-    /// 从 YAML 字符串加载配置
-    pub fn from_str(yaml: &str) -> Result<Self, serde_yaml::Error> {
+impl std::str::FromStr for AppConfig {
+    type Err = serde_yaml::Error;
+
+    /// Parse an `AppConfig` from a YAML string.
+    fn from_str(yaml: &str) -> std::result::Result<Self, Self::Err> {
         serde_yaml::from_str(yaml)
     }
 }

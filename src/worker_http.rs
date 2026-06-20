@@ -1,10 +1,10 @@
+use crate::worker::WorkerNode;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use warp::{Filter, Rejection, Reply, http::StatusCode, reply::WithStatus, reply::Json};
-use crate::worker::WorkerNode;
+use warp::{http::StatusCode, reply::Json, reply::WithStatus, Filter, Rejection, Reply};
 
-use base64::{Engine as _, engine::general_purpose};
+use base64::{engine::general_purpose, Engine as _};
 
 #[derive(Debug)]
 struct CustomReject(StatusCode, String);
@@ -90,8 +90,12 @@ async fn put_handler(
     node: Arc<WorkerNode>,
 ) -> Result<impl Reply, Rejection> {
     let tags = if let Some(tags_str) = query.tags {
-        Some(serde_json::from_str(&tags_str)
-            .map_err(|_| warp::reject::custom(CustomReject(StatusCode::BAD_REQUEST, "Invalid tags JSON".to_string())))?)
+        Some(serde_json::from_str(&tags_str).map_err(|_| {
+            warp::reject::custom(CustomReject(
+                StatusCode::BAD_REQUEST,
+                "Invalid tags JSON".to_string(),
+            ))
+        })?)
     } else {
         None
     };
@@ -109,21 +113,32 @@ async fn put_handler(
     };
 
     node.put_object(&key, body, meta.clone()).map_err(|e| {
-        warp::reject::custom(CustomReject(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+        warp::reject::custom(CustomReject(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            e.to_string(),
+        ))
     })?;
 
     Ok(warp::reply::json(&PutResponse {
-        meta: convert_meta(meta)
+        meta: convert_meta(meta),
     }))
 }
 
-async fn get_handler(
-    key: String,
-    node: Arc<WorkerNode>,
-) -> Result<impl Reply, Rejection> {
-    let (value, meta) = node.get_object(&key)
-        .map_err(|e| warp::reject::custom(CustomReject(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())))?
-        .ok_or_else(|| warp::reject::custom(CustomReject(StatusCode::NOT_FOUND, "Key not found".to_string())))?;
+async fn get_handler(key: String, node: Arc<WorkerNode>) -> Result<impl Reply, Rejection> {
+    let (value, meta) = node
+        .get_object(&key)
+        .map_err(|e| {
+            warp::reject::custom(CustomReject(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                e.to_string(),
+            ))
+        })?
+        .ok_or_else(|| {
+            warp::reject::custom(CustomReject(
+                StatusCode::NOT_FOUND,
+                "Key not found".to_string(),
+            ))
+        })?;
 
     Ok(warp::reply::json(&GetResponse {
         meta: meta.map(convert_meta),
@@ -131,39 +146,43 @@ async fn get_handler(
     }))
 }
 
-async fn delete_handler(
-    key: String,
-    node: Arc<WorkerNode>,
-) -> Result<impl Reply, Rejection> {
+async fn delete_handler(key: String, node: Arc<WorkerNode>) -> Result<impl Reply, Rejection> {
     node.delete_object(&key).map_err(|e| {
-        warp::reject::custom(CustomReject(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+        warp::reject::custom(CustomReject(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            e.to_string(),
+        ))
     })?;
 
     Ok(warp::reply::json(&DeleteResponse { success: true }))
 }
 
-async fn exists_handler(
-    key: String,
-    node: Arc<WorkerNode>,
-) -> Result<impl Reply, Rejection> {
-    let exists = node.meta_exists(&key)
-        .map_err(|e| warp::reject::custom(CustomReject(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())))?;
+async fn exists_handler(key: String, node: Arc<WorkerNode>) -> Result<impl Reply, Rejection> {
+    let exists = node.meta_exists(&key).map_err(|e| {
+        warp::reject::custom(CustomReject(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            e.to_string(),
+        ))
+    })?;
 
     Ok(warp::reply::json(&ExistsResponse { exists }))
 }
 
-async fn list_handler(
-    query: ListQuery,
-    node: Arc<WorkerNode>,
-) -> Result<impl Reply, Rejection> {
+async fn list_handler(query: ListQuery, node: Arc<WorkerNode>) -> Result<impl Reply, Rejection> {
     let prefix = query.prefix.unwrap_or_default();
     let limit = query.limit.unwrap_or(100) as usize;
 
-    let metas = node.list_meta(&prefix, limit)
-        .map_err(|e| warp::reject::custom(CustomReject(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())))?;
+    let metas = node.list_meta(&prefix, limit).map_err(|e| {
+        warp::reject::custom(CustomReject(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            e.to_string(),
+        ))
+    })?;
 
     let response_metas = metas.into_iter().map(convert_meta).collect();
-    Ok(warp::reply::json(&ListResponse { metas: response_metas }))
+    Ok(warp::reply::json(&ListResponse {
+        metas: response_metas,
+    }))
 }
 
 async fn put_batch_handler(
@@ -175,8 +194,12 @@ async fn put_batch_handler(
     let mut metas = Vec::with_capacity(req.items.len());
 
     for item in req.items {
-        let value = general_purpose::STANDARD.decode(&item.value)
-            .map_err(|_| warp::reject::custom(CustomReject(StatusCode::BAD_REQUEST, "Invalid base64 value".to_string())))?;
+        let value = general_purpose::STANDARD.decode(&item.value).map_err(|_| {
+            warp::reject::custom(CustomReject(
+                StatusCode::BAD_REQUEST,
+                "Invalid base64 value".to_string(),
+            ))
+        })?;
         let value = Bytes::from(value);
 
         let meta = crate::meta::ObjectMeta {
@@ -186,20 +209,25 @@ async fn put_batch_handler(
             updated_at: now,
             content_type: item.content_type,
             tags: item.tags,
-        checksum: None,
-        storage_node: None,
-    };
+            checksum: None,
+            storage_node: None,
+        };
 
         metas.push(meta.clone());
         items.push((item.key, value, meta));
     }
 
     node.put_objects_batch(items).map_err(|e| {
-        warp::reject::custom(CustomReject(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+        warp::reject::custom(CustomReject(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            e.to_string(),
+        ))
     })?;
 
     let response_metas = metas.into_iter().map(convert_meta).collect();
-    Ok(warp::reply::json(&ListResponse { metas: response_metas }))
+    Ok(warp::reply::json(&ListResponse {
+        metas: response_metas,
+    }))
 }
 
 /// CORS 配置
@@ -207,17 +235,12 @@ fn cors() -> warp::cors::Cors {
     warp::cors()
         .allow_any_origin()
         .allow_methods(vec!["GET", "POST", "DELETE", "PUT", "OPTIONS"])
-        .allow_headers(vec![
-            "Content-Type",
-            "Authorization",
-            "X-Requested-With",
-        ])
+        .allow_headers(vec!["Content-Type", "Authorization", "X-Requested-With"])
         .build()
 }
 
 /// 启动 Worker 的 RESTful HTTP 服务
 pub async fn start_worker_http_server(node: Arc<WorkerNode>, port: u16) {
-
     // POST /objects/:key  写入对象
     let node_put = node.clone();
     let put_route = warp::path!("objects" / String)
@@ -285,20 +308,24 @@ pub async fn start_worker_http_server(node: Arc<WorkerNode>, port: u16) {
         .or(delete_route)
         .with(cors())
         .recover(|err: Rejection| async move {
-            let result: Result<WithStatus<Json>, Rejection> = if let Some(custom) = err.find::<CustomReject>() {
-                Ok(warp::reply::with_status(
-                    warp::reply::json(&serde_json::json!({"error": custom.1})),
-                    custom.0,
-                ))
-            } else {
-                Ok(warp::reply::with_status(
-                    warp::reply::json(&serde_json::json!({"error": "Internal Server Error"})),
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                ))
-            };
+            let result: Result<WithStatus<Json>, Rejection> =
+                if let Some(custom) = err.find::<CustomReject>() {
+                    Ok(warp::reply::with_status(
+                        warp::reply::json(&serde_json::json!({"error": custom.1})),
+                        custom.0,
+                    ))
+                } else {
+                    Ok(warp::reply::with_status(
+                        warp::reply::json(&serde_json::json!({"error": "Internal Server Error"})),
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                    ))
+                };
             result
         });
 
-    println!("🌐 Worker RESTful API server running on http://0.0.0.0:{}", port);
+    println!(
+        "🌐 Worker RESTful API server running on http://0.0.0.0:{}",
+        port
+    );
     warp::serve(routes).run(([0, 0, 0, 0], port)).await;
 }

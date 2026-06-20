@@ -1,14 +1,14 @@
+use crate::error::{Result, StoreError};
+use crate::kv::KvStore;
+use crate::meta::{MetaStore, ObjectMeta};
 use bytes::Bytes;
 use chrono::Utc;
 use dashmap::DashMap;
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use tokio::sync::Notify;
-use crate::error::{Result, StoreError};
-use crate::kv::KvStore;
-use crate::meta::{MetaStore, ObjectMeta};
 
 /// 待刷盘的写操作
 #[derive(Debug, Clone)]
@@ -65,7 +65,9 @@ impl WriteBuffer {
 
     /// 取出所有待刷盘操作（drain 语义）
     fn drain(&self) -> HashMap<String, PendingOp> {
-        let items: Vec<(String, PendingOp)> = self.pending.iter()
+        let items: Vec<(String, PendingOp)> = self
+            .pending
+            .iter()
             .map(|r| (r.key().clone(), r.value().clone()))
             .collect();
         self.pending.clear();
@@ -178,7 +180,13 @@ impl Store {
         Ok(())
     }
 
-    pub async fn put(&self, key: String, value: Bytes, content_type: Option<String>, tags: Option<serde_json::Value>) -> Result<ObjectMeta> {
+    pub async fn put(
+        &self,
+        key: String,
+        value: Bytes,
+        content_type: Option<String>,
+        tags: Option<serde_json::Value>,
+    ) -> Result<ObjectMeta> {
         // 构造元数据
         let now = Utc::now();
         let meta = ObjectMeta {
@@ -188,9 +196,9 @@ impl Store {
             updated_at: now,
             content_type,
             tags,
-        checksum: None,
-        storage_node: None,
-    };
+            checksum: None,
+            storage_node: None,
+        };
 
         // 写入缓存（读路径优先命中缓存）
         if self.cache.len() < self.cache_size {
@@ -241,7 +249,9 @@ impl Store {
         }
 
         // 查磁盘
-        let value = self.kv_store.get(key)?
+        let value = self
+            .kv_store
+            .get(key)?
             .ok_or_else(|| StoreError::KeyNotFound(key.to_string()))?;
         let meta = self.meta_store.get(key)?;
 
@@ -271,14 +281,15 @@ impl Store {
             return Ok(true);
         }
         // 查磁盘
-        Ok(self.meta_store.exists(key)?)
+        self.meta_store.exists(key)
     }
 
     pub async fn list(&self, prefix: &str, limit: usize) -> Result<Vec<ObjectMeta>> {
         // 先从磁盘获取基础列表
         let mut metas = self.meta_store.list(prefix, limit)?;
         // 合并 pending 中的更新（覆盖/新增/删除）
-        let mut seen: std::collections::HashSet<String> = metas.iter().map(|m| m.key.clone()).collect();
+        let mut seen: std::collections::HashSet<String> =
+            metas.iter().map(|m| m.key.clone()).collect();
         for entry in self.write_buffer.pending.iter() {
             let key = entry.key();
             if key.starts_with(prefix) {
@@ -302,7 +313,10 @@ impl Store {
         Ok(metas)
     }
 
-    pub async fn put_batch(&self, items: Vec<(String, Bytes, Option<String>, Option<serde_json::Value>)>) -> Result<Vec<ObjectMeta>> {
+    pub async fn put_batch(
+        &self,
+        items: Vec<(String, Bytes, Option<String>, Option<serde_json::Value>)>,
+    ) -> Result<Vec<ObjectMeta>> {
         let mut metas = Vec::with_capacity(items.len());
         let now = Utc::now();
 
@@ -314,9 +328,9 @@ impl Store {
                 updated_at: now,
                 content_type,
                 tags,
-        checksum: None,
-        storage_node: None,
-    };
+                checksum: None,
+                storage_node: None,
+            };
             // 写缓存
             if self.cache.len() < self.cache_size {
                 self.cache.insert(key.clone(), value.clone());
