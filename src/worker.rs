@@ -10,9 +10,11 @@ use std::time::{Duration, Instant};
 use tokio::sync::Notify;
 use tonic::{Request, Response, Status};
 
+use crate::config::QuadShardConfig;
 use crate::grpc::proto;
 use crate::kv::KvStore;
 use crate::meta::{MetaStore, ObjectMeta};
+use crate::quad_shard::QuadShardManager;
 use crate::shard::{ShardConfig, ShardManager};
 
 /// Worker 节点配置
@@ -38,6 +40,8 @@ pub struct WorkerConfig {
     pub weight: i32,
     /// 分片配置（如果启用分片，则使用 ShardManager）
     pub shard_configs: Option<Vec<ShardConfig>>,
+    /// QuadKey 分片配置
+    pub quad_shard_config: Option<QuadShardConfig>,
 }
 
 impl WorkerConfig {
@@ -59,6 +63,7 @@ impl WorkerConfig {
             heartbeat_interval_secs: 10,
             weight: 1,
             shard_configs: None,
+            quad_shard_config: None,
         }
     }
 
@@ -357,6 +362,8 @@ pub struct WorkerNode {
     pub meta_store: Option<Arc<MetaStore>>,
     /// 分片模式下的 ShardManager
     pub shard_manager: Option<Arc<ShardManager>>,
+    /// QuadKey 分片管理器（可选）
+    pub quad_shard: Option<Arc<QuadShardManager>>,
     /// 写入统计（所有模式共享）
     write_stats: Arc<WriteStats>,
     /// 单库模式下的写合并缓冲区
@@ -378,6 +385,7 @@ impl WorkerNode {
                     kv_store: None,
                     meta_store: None,
                     shard_manager: Some(Arc::new(manager)),
+                    quad_shard: None,
                     write_stats,
                     write_buffer: None,
                 });
@@ -397,11 +405,17 @@ impl WorkerNode {
 
         let write_buffer = Arc::new(WriteBuffer::new());
 
+        let quad_shard = config
+            .quad_shard_config
+            .as_ref()
+            .map(|qc| Arc::new(QuadShardManager::new(qc.clone()).expect("QuadShardManager init")));
+
         Ok(Self {
             config,
             kv_store: Some(kv_store),
             meta_store: Some(meta_store),
             shard_manager: None,
+            quad_shard,
             write_stats,
             write_buffer: Some(write_buffer),
         })
@@ -1048,6 +1062,36 @@ impl proto::worker_service_server::WorkerService for WorkerService {
         request: Request<proto::PutRequest>,
     ) -> std::result::Result<Response<proto::PutResponse>, Status> {
         let req = request.into_inner();
+
+        // QuadKey 分片路由
+        if !req.quadkey.is_empty() && req.level > 0 {
+            let quad = self
+                .node
+                .quad_shard
+                .as_ref()
+                .ok_or_else(|| Status::internal("QuadShardManager 未启用"))?;
+            let value = Bytes::from(req.value);
+            let ct = if req.content_type.is_empty() {
+                None
+            } else {
+                Some(req.content_type)
+            };
+            let tags = if req.tags.is_empty() {
+                None
+            } else {
+                Some(
+                    serde_json::from_str(&req.tags)
+                        .map_err(|e| Status::invalid_argument(format!("Invalid tags: {}", e)))?,
+                )
+            };
+            let meta = quad
+                .put(&req.quadkey, req.level, &req.key, value, ct, tags)
+                .map_err(|e| Status::internal(e.to_string()))?;
+            return Ok(Response::new(proto::PutResponse {
+                meta: Some(Self::convert_meta(meta)),
+            }));
+        }
+
         let value = Bytes::from(req.value);
 
         let now = Utc::now();
@@ -1091,6 +1135,27 @@ impl proto::worker_service_server::WorkerService for WorkerService {
     ) -> std::result::Result<Response<proto::GetResponse>, Status> {
         let req = request.into_inner();
 
+        // QuadKey 分片路由
+        if !req.quadkey.is_empty() && req.level > 0 {
+            let quad = self
+                .node
+                .quad_shard
+                .as_ref()
+                .ok_or_else(|| Status::internal("QuadShardManager 未启用"))?;
+            let (value, meta) =
+                quad.get(&req.quadkey, req.level, &req.key)
+                    .map_err(|e| match e {
+                        crate::error::StoreError::KeyNotFound(_) => {
+                            Status::not_found(format!("Key not found: {}", req.key))
+                        }
+                        _ => Status::internal(e.to_string()),
+                    })?;
+            return Ok(Response::new(proto::GetResponse {
+                value: value.to_vec(),
+                meta: Some(Self::convert_meta(meta)),
+            }));
+        }
+
         let req_key = req.key;
         let node = self.node.clone();
         let key = req_key.clone();
@@ -1113,6 +1178,18 @@ impl proto::worker_service_server::WorkerService for WorkerService {
     ) -> std::result::Result<Response<proto::DeleteResponse>, Status> {
         let req = request.into_inner();
 
+        // QuadKey 分片路由
+        if !req.quadkey.is_empty() && req.level > 0 {
+            let quad = self
+                .node
+                .quad_shard
+                .as_ref()
+                .ok_or_else(|| Status::internal("QuadShardManager 未启用"))?;
+            quad.delete(&req.quadkey, req.level, &req.key)
+                .map_err(|e| Status::internal(e.to_string()))?;
+            return Ok(Response::new(proto::DeleteResponse { success: true }));
+        }
+
         let node = self.node.clone();
         let key = req.key;
         // delete_object 是 WriteBuffer 内存操作，不需要 spawn_blocking
@@ -1127,6 +1204,19 @@ impl proto::worker_service_server::WorkerService for WorkerService {
         request: Request<proto::ExistsRequest>,
     ) -> std::result::Result<Response<proto::ExistsResponse>, Status> {
         let req = request.into_inner();
+
+        // QuadKey 分片路由
+        if !req.quadkey.is_empty() && req.level > 0 {
+            let quad = self
+                .node
+                .quad_shard
+                .as_ref()
+                .ok_or_else(|| Status::internal("QuadShardManager 未启用"))?;
+            let exists = quad
+                .exists(&req.quadkey, req.level, &req.key)
+                .map_err(|e| Status::internal(e.to_string()))?;
+            return Ok(Response::new(proto::ExistsResponse { exists }));
+        }
 
         let node = self.node.clone();
         let key = req.key;
@@ -1143,6 +1233,20 @@ impl proto::worker_service_server::WorkerService for WorkerService {
         request: Request<proto::ListRequest>,
     ) -> std::result::Result<Response<proto::ListResponse>, Status> {
         let req = request.into_inner();
+
+        // QuadKey 分片路由
+        if !req.quadkey.is_empty() && req.level > 0 {
+            let quad = self
+                .node
+                .quad_shard
+                .as_ref()
+                .ok_or_else(|| Status::internal("QuadShardManager 未启用"))?;
+            let metas = quad
+                .list(&req.quadkey, req.level, &req.prefix, req.limit as usize)
+                .map_err(|e| Status::internal(e.to_string()))?;
+            let proto_metas = metas.into_iter().map(Self::convert_meta).collect();
+            return Ok(Response::new(proto::ListResponse { metas: proto_metas }));
+        }
 
         let node = self.node.clone();
         let prefix = req.prefix;
@@ -1162,6 +1266,38 @@ impl proto::worker_service_server::WorkerService for WorkerService {
         request: Request<proto::PutBatchRequest>,
     ) -> std::result::Result<Response<proto::PutBatchResponse>, Status> {
         let req = request.into_inner();
+
+        // QuadKey 分片路由：检查第一个 item 决定是否走 quad 路由
+        if !req.items.is_empty() && !req.items[0].quadkey.is_empty() && req.items[0].level > 0 {
+            let quad = self
+                .node
+                .quad_shard
+                .as_ref()
+                .ok_or_else(|| Status::internal("QuadShardManager 未启用"))?;
+            let mut metas = Vec::with_capacity(req.items.len());
+            for item in req.items {
+                let value = Bytes::from(item.value);
+                let ct = if item.content_type.is_empty() {
+                    None
+                } else {
+                    Some(item.content_type)
+                };
+                let tags =
+                    if item.tags.is_empty() {
+                        None
+                    } else {
+                        Some(serde_json::from_str(&item.tags).map_err(|e| {
+                            Status::invalid_argument(format!("Invalid tags: {}", e))
+                        })?)
+                    };
+                let meta = quad
+                    .put(&item.quadkey, item.level, &item.key, value, ct, tags)
+                    .map_err(|e| Status::internal(e.to_string()))?;
+                metas.push(Self::convert_meta(meta));
+            }
+            return Ok(Response::new(proto::PutBatchResponse { metas }));
+        }
+
         let now = Utc::now();
 
         let mut items = Vec::with_capacity(req.items.len());

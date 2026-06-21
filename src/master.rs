@@ -199,9 +199,11 @@ impl MasterNode {
         let wid = worker_id.to_string();
         let addr = address.to_string();
         let tags_clone = tags.clone();
-        tokio::task::spawn_blocking(move || store.register_worker(&wid, &addr, weight, &tags_clone))
-            .await
-            .map_err(|e| StoreError::InvalidArgument(format!("spawn_blocking 失败: {}", e)))??;
+        tokio::task::spawn_blocking(move || {
+            store.register_worker(&wid, &addr, weight, &tags_clone)
+        })
+        .await
+        .map_err(|e| StoreError::InvalidArgument(format!("spawn_blocking 失败: {}", e)))??;
 
         // 再更新内存缓存
         let mut workers = self.workers.write().await;
@@ -356,10 +358,7 @@ impl MasterNode {
     ///
     /// 返回 (primary, optional_secondary)。
     /// secondary 用于异步副本写入，提升高可用性。
-    pub async fn route_with_replicas(
-        &self,
-        key: &str,
-    ) -> Result<(WorkerInfo, Option<WorkerInfo>)> {
+    pub async fn route_with_replicas(&self, key: &str) -> Result<(WorkerInfo, Option<WorkerInfo>)> {
         let workers = self.workers.read().await;
         let alive_workers: Vec<&WorkerInfo> = workers.values().filter(|w| w.alive).collect();
 
@@ -507,6 +506,7 @@ impl MasterNode {
                         .as_ref()
                         .map(|t| t.to_string())
                         .unwrap_or_default(),
+                    ..Default::default()
                 });
 
                 // 同步写入主副本（失败则 fallback 到备副本）
@@ -543,6 +543,7 @@ impl MasterNode {
                                         .as_ref()
                                         .map(|t| t.to_string())
                                         .unwrap_or_default(),
+                                    ..Default::default()
                                 }))
                                 .await
                                 .map_err(|e2| {
@@ -572,12 +573,14 @@ impl MasterNode {
                             .as_ref()
                             .map(|t| t.to_string())
                             .unwrap_or_default(),
+                        ..Default::default()
                     });
                     let _max_msg = self.config.heartbeat_timeout_secs; // 复用为超时秒数
                     tokio::spawn(async move {
-                        let endpoint = match tonic::transport::Endpoint::from_shared(
-                            format!("http://{}", sec_addr),
-                        ) {
+                        let endpoint = match tonic::transport::Endpoint::from_shared(format!(
+                            "http://{}",
+                            sec_addr
+                        )) {
                             Ok(e) => e
                                 .timeout(Duration::from_secs(30))
                                 .connect_timeout(Duration::from_secs(3)),
@@ -617,6 +620,7 @@ impl MasterNode {
                     let mut client = self.get_worker_client(&primary.address).await?;
                     let request = tonic::Request::new(proto::GetRequest {
                         key: key.to_string(),
+                        ..Default::default()
                     });
                     client.get(request).await
                 };
@@ -627,8 +631,10 @@ impl MasterNode {
                         // 主副本失败，尝试备副本
                         if let Some(sec) = &secondary {
                             let mut client = self.get_worker_client(&sec.address).await?;
-                            let request =
-                                tonic::Request::new(proto::GetRequest { key: key.to_string() });
+                            let request = tonic::Request::new(proto::GetRequest {
+                                key: key.to_string(),
+                                ..Default::default()
+                            });
                             client.get(request).await.map_err(|_| {
                                 StoreError::InvalidArgument(format!(
                                     "Worker 读取失败(主+备均失败): {}",
@@ -696,6 +702,7 @@ impl MasterNode {
 
                 let request = tonic::Request::new(proto::DeleteRequest {
                     key: key.to_string(),
+                    ..Default::default()
                 });
 
                 client
@@ -725,6 +732,7 @@ impl MasterNode {
 
                 let request = tonic::Request::new(proto::ExistsRequest {
                     key: key.to_string(),
+                    ..Default::default()
                 });
 
                 let response = client
@@ -780,9 +788,10 @@ impl MasterNode {
                         }
                         _ => {
                             // gRPC：list 操作不频繁，每次新建连接，避免跨任务共享客户端
-                            let endpoint = match tonic::transport::Endpoint::from_shared(
-                                format!("http://{}", worker.address),
-                            ) {
+                            let endpoint = match tonic::transport::Endpoint::from_shared(format!(
+                                "http://{}",
+                                worker.address
+                            )) {
                                 Ok(e) => e
                                     .timeout(Duration::from_secs(30))
                                     .connect_timeout(Duration::from_secs(5)),
@@ -803,6 +812,7 @@ impl MasterNode {
                             let request = tonic::Request::new(proto::ListRequest {
                                 prefix: prefix.clone(),
                                 limit: limit as u32,
+                                ..Default::default()
                             });
 
                             match client.list(request).await {
@@ -884,6 +894,7 @@ impl MasterNode {
                             value: value.to_vec(),
                             content_type: ct.clone().unwrap_or_default(),
                             tags: tags.as_ref().map(|t| t.to_string()).unwrap_or_default(),
+                            ..Default::default()
                         })
                         .collect();
 

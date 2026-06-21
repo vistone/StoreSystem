@@ -47,6 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             value: value.clone(),
             content_type: "text/plain".to_string(),
             tags: String::new(),
+            ..Default::default()
         };
         store.put(put_req).await?;
 
@@ -54,7 +55,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         // 读取
-        let get_resp = store.get(GetRequest { key: key.clone() }).await;
+        let get_resp = store
+            .get(GetRequest {
+                key: key.clone(),
+                ..Default::default()
+            })
+            .await;
         match get_resp {
             Ok(resp) => {
                 let got = resp.into_inner().value;
@@ -91,6 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             value: vec![b'x'; 1024],
             content_type: "text/plain".to_string(),
             tags: String::new(),
+            ..Default::default()
         };
         store.put(put_req).await?;
         print!("  写入 {} -> worker-{}\r", key, wid);
@@ -109,7 +116,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .get_route(GetRouteRequest { key: key.clone() })
             .await?;
         let wid = route.into_inner().worker_id;
-        let get_resp = store.get(GetRequest { key: key.clone() }).await;
+        let get_resp = store
+            .get(GetRequest {
+                key: key.clone(),
+                ..Default::default()
+            })
+            .await;
         match get_resp {
             Ok(_) => {
                 ok_count += 1;

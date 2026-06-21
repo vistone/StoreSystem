@@ -19,7 +19,6 @@ global:
   # - both: 同时启动 gRPC 和 RESTful（默认）
   protocol: "both"
 
-
 # ---------- Master 节点配置 ----------
 master:
   # Master 监听地址
@@ -86,6 +85,25 @@ shard:
   # Meta 数据库文件名模板（{} 会被替换为分片编号）
   meta_name_template: "meta_{}"
   # Meta 数据库文件扩展名
+  meta_ext: ".db"
+  # 缓存大小（每个分片）
+  cache_size: 10000
+  # 刷盘间隔（毫秒）
+  flush_interval_ms: 5
+
+# ---------- QuadKey 分片配置 ----------
+quad_shard:
+  # 层级 ≤ base_level 时，所有数据存入 base DB
+  base_level: 8
+  # 层级阈值：base < level < split_level 用 4 位前缀，≥ split_level 用 8 位
+  split_level: 18
+  # 数据根目录
+  data_dir: "quad_data"
+  # 数据类型子目录（不同数据类型隔离）
+  data_type: "objects"
+  # KV 数据库扩展名
+  kv_ext: ".kv"
+  # Meta 数据库扩展名
   meta_ext: ".db"
   # 缓存大小（每个分片）
   cache_size: 10000

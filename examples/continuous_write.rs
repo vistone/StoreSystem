@@ -42,6 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             value: value.clone(),
                             content_type: "text/plain".to_string(),
                             tags: String::new(),
+                            ..Default::default()
                         }
                     })
                     .collect();

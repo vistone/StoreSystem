@@ -12,6 +12,7 @@ pub mod master_log_ws;
 pub mod master_store;
 pub mod master_ws;
 pub mod meta;
+pub mod quad_shard;
 pub mod shard;
 pub mod store;
 pub mod worker;
@@ -22,10 +23,13 @@ pub use config::AppConfig;
 pub use error::{Result, StoreError};
 pub use health::{check_storage_capacity, DiskHealth, HealthInfo};
 pub use logger::{LogCategory, LogEntry, LogLevel, LogQuery, LogStats, LogStore, WorkerLogger};
-pub use master::{HeartbeatPayload, MasterAdminService, MasterNode, MasterStoreService, WorkerInfo};
+pub use master::{
+    HeartbeatPayload, MasterAdminService, MasterNode, MasterStoreService, WorkerInfo,
+};
 pub use master_http::WorkerHttpClient;
 pub use master_ws::WorkerWsClient;
 pub use meta::ObjectMeta;
+pub use quad_shard::QuadShardManager;
 pub use shard::{ShardConfig, ShardManager, ShardStrategy};
 pub use store::Store;
 pub use worker::{WorkerConfig, WorkerNode, WorkerService};

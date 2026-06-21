@@ -57,6 +57,8 @@ message PutRequest {
   bytes value = 2;
   string content_type = 3;
   string tags = 4; // JSON 格式
+  string quadkey = 5; // 可选：quadkey 编码，非空时走 QuadKey 路由
+  uint32 level = 6; // 可选：quadkey 层级
 }
 
 message PutResponse {
@@ -65,6 +67,8 @@ message PutResponse {
 
 message GetRequest {
   string key = 1;
+  string quadkey = 2;
+  uint32 level = 3;
 }
 
 message GetResponse {
@@ -74,6 +78,8 @@ message GetResponse {
 
 message DeleteRequest {
   string key = 1;
+  string quadkey = 2;
+  uint32 level = 3;
 }
 
 message DeleteResponse {
@@ -82,6 +88,8 @@ message DeleteResponse {
 
 message ExistsRequest {
   string key = 1;
+  string quadkey = 2;
+  uint32 level = 3;
 }
 
 message ExistsResponse {
@@ -91,6 +99,8 @@ message ExistsResponse {
 message ListRequest {
   string prefix = 1;
   uint32 limit = 2;
+  string quadkey = 3;
+  uint32 level = 4;
 }
 
 message ListResponse {
@@ -102,6 +112,8 @@ message BatchItem {
   bytes value = 2;
   string content_type = 3;
   string tags = 4;
+  string quadkey = 5;
+  uint32 level = 6;
 }
 
 message PutBatchRequest {
@@ -114,9 +126,9 @@ message PutBatchResponse {
 
 // Worker 注册
 message RegisterWorkerRequest {
-  string worker_id = 1;       // Worker 唯一标识
-  string address = 2;         // Worker 地址，如 "192.168.1.10:50061"
-  int32 weight = 3;           // 权重，用于负载均衡
+  string worker_id = 1; // Worker 唯一标识
+  string address = 2; // Worker 地址，如 "192.168.1.10:50061"
+  int32 weight = 3; // 权重，用于负载均衡
   map<string, string> tags = 4; // 自定义标签
 }
 
@@ -133,24 +145,23 @@ message HeartbeatRequest {
   uint64 storage_capacity_bytes = 3;
   uint32 active_connections = 4;
   // ---- 健康监控字段（v0.2.0 新增） ----
-  double storage_usage_ratio = 5;     // 存储使用率 0.0~1.0
-  string disk_health = 6;             // 磁盘健康状态: "Healthy" | "Warning" | "Critical" | "Unknown"
-  uint64 memory_used_bytes = 7;       // 已用内存
-  uint64 memory_total_bytes = 8;      // 总内存
-  double memory_usage_ratio = 9;      // 内存使用率 0.0~1.0
-  double cpu_usage_ratio = 10;        // CPU 使用率 0.0~1.0
-  uint32 cpu_cores = 11;              // CPU 核心数
+  double storage_usage_ratio = 5; // 存储使用率 0.0~1.0
+  string disk_health = 6; // 磁盘健康状态: "Healthy" | "Warning" | "Critical" | "Unknown"
+  uint64 memory_used_bytes = 7; // 已用内存
+  uint64 memory_total_bytes = 8; // 总内存
+  double memory_usage_ratio = 9; // 内存使用率 0.0~1.0
+  double cpu_usage_ratio = 10; // CPU 使用率 0.0~1.0
+  uint32 cpu_cores = 11; // CPU 核心数
   // ---- 写入统计字段（v0.3.0 新增） ----
-  uint64 total_put_count = 12;        // 累计写入操作数
-  uint64 total_put_bytes = 13;        // 累计写入字节数
-  uint64 flushed_count = 14;          // 已刷盘操作数
-  uint64 flushed_bytes = 15;          // 已刷盘字节数
-  uint64 pending_count = 16;          // 待刷盘操作数（缓存中未入库）
-  uint64 pending_bytes = 17;          // 待刷盘字节数
-  double write_rate_per_sec = 18;     // 近期写入速率（ops/sec）
-  double write_bytes_per_sec = 19;    // 近期写入带宽（bytes/sec）
+  uint64 total_put_count = 12; // 累计写入操作数
+  uint64 total_put_bytes = 13; // 累计写入字节数
+  uint64 flushed_count = 14; // 已刷盘操作数
+  uint64 flushed_bytes = 15; // 已刷盘字节数
+  uint64 pending_count = 16; // 待刷盘操作数（缓存中未入库）
+  uint64 pending_bytes = 17; // 待刷盘字节数
+  double write_rate_per_sec = 18; // 近期写入速率（ops/sec）
+  double write_bytes_per_sec = 19; // 近期写入带宽（bytes/sec）
 }
-
 
 message HeartbeatResponse {
   bool success = 1;
@@ -174,24 +185,23 @@ message WorkerInfo {
   uint32 active_connections = 8;
   map<string, string> tags = 9;
   // ---- 健康监控字段（v0.2.0 新增） ----
-  double storage_usage_ratio = 10;     // 存储使用率 0.0~1.0
-  string disk_health = 11;             // 磁盘健康状态
-  uint64 memory_used_bytes = 12;       // 已用内存
-  uint64 memory_total_bytes = 13;      // 总内存
-  double memory_usage_ratio = 14;      // 内存使用率 0.0~1.0
-  double cpu_usage_ratio = 15;         // CPU 使用率 0.0~1.0
-  uint32 cpu_cores = 16;               // CPU 核心数
+  double storage_usage_ratio = 10; // 存储使用率 0.0~1.0
+  string disk_health = 11; // 磁盘健康状态
+  uint64 memory_used_bytes = 12; // 已用内存
+  uint64 memory_total_bytes = 13; // 总内存
+  double memory_usage_ratio = 14; // 内存使用率 0.0~1.0
+  double cpu_usage_ratio = 15; // CPU 使用率 0.0~1.0
+  uint32 cpu_cores = 16; // CPU 核心数
   // ---- 写入统计字段（v0.3.0 新增） ----
-  uint64 total_put_count = 17;         // 累计写入操作数
-  uint64 total_put_bytes = 18;         // 累计写入字节数
-  uint64 flushed_count = 19;           // 已刷盘操作数
-  uint64 flushed_bytes = 20;           // 已刷盘字节数
-  uint64 pending_count = 21;           // 待刷盘操作数
-  uint64 pending_bytes = 22;           // 待刷盘字节数
-  double write_rate_per_sec = 23;      // 写入速率 ops/sec
-  double write_bytes_per_sec = 24;     // 写入带宽 bytes/sec
+  uint64 total_put_count = 17; // 累计写入操作数
+  uint64 total_put_bytes = 18; // 累计写入字节数
+  uint64 flushed_count = 19; // 已刷盘操作数
+  uint64 flushed_bytes = 20; // 已刷盘字节数
+  uint64 pending_count = 21; // 待刷盘操作数
+  uint64 pending_bytes = 22; // 待刷盘字节数
+  double write_rate_per_sec = 23; // 写入速率 ops/sec
+  double write_bytes_per_sec = 24; // 写入带宽 bytes/sec
 }
-
 
 message ListWorkersResponse {
   repeated WorkerInfo workers = 1;

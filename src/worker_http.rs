@@ -15,6 +15,8 @@ impl warp::reject::Reject for CustomReject {}
 pub struct PutQuery {
     pub content_type: Option<String>,
     pub tags: Option<String>,
+    pub quadkey: Option<String>,
+    pub level: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -84,6 +86,7 @@ fn convert_meta(meta: crate::meta::ObjectMeta) -> ObjectMetaResponse {
 }
 
 async fn put_handler(
+    _data_type: String,
     key: String,
     query: PutQuery,
     body: Bytes,
@@ -124,7 +127,11 @@ async fn put_handler(
     }))
 }
 
-async fn get_handler(key: String, node: Arc<WorkerNode>) -> Result<impl Reply, Rejection> {
+async fn get_handler(
+    _data_type: String,
+    key: String,
+    node: Arc<WorkerNode>,
+) -> Result<impl Reply, Rejection> {
     let (value, meta) = node
         .get_object(&key)
         .map_err(|e| {
@@ -146,7 +153,11 @@ async fn get_handler(key: String, node: Arc<WorkerNode>) -> Result<impl Reply, R
     }))
 }
 
-async fn delete_handler(key: String, node: Arc<WorkerNode>) -> Result<impl Reply, Rejection> {
+async fn delete_handler(
+    _data_type: String,
+    key: String,
+    node: Arc<WorkerNode>,
+) -> Result<impl Reply, Rejection> {
     node.delete_object(&key).map_err(|e| {
         warp::reject::custom(CustomReject(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -157,7 +168,11 @@ async fn delete_handler(key: String, node: Arc<WorkerNode>) -> Result<impl Reply
     Ok(warp::reply::json(&DeleteResponse { success: true }))
 }
 
-async fn exists_handler(key: String, node: Arc<WorkerNode>) -> Result<impl Reply, Rejection> {
+async fn exists_handler(
+    _data_type: String,
+    key: String,
+    node: Arc<WorkerNode>,
+) -> Result<impl Reply, Rejection> {
     let exists = node.meta_exists(&key).map_err(|e| {
         warp::reject::custom(CustomReject(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -168,7 +183,11 @@ async fn exists_handler(key: String, node: Arc<WorkerNode>) -> Result<impl Reply
     Ok(warp::reply::json(&ExistsResponse { exists }))
 }
 
-async fn list_handler(query: ListQuery, node: Arc<WorkerNode>) -> Result<impl Reply, Rejection> {
+async fn list_handler(
+    _data_type: String,
+    query: ListQuery,
+    node: Arc<WorkerNode>,
+) -> Result<impl Reply, Rejection> {
     let prefix = query.prefix.unwrap_or_default();
     let limit = query.limit.unwrap_or(100) as usize;
 
@@ -186,6 +205,7 @@ async fn list_handler(query: ListQuery, node: Arc<WorkerNode>) -> Result<impl Re
 }
 
 async fn put_batch_handler(
+    _data_type: String,
     req: PutBatchRequest,
     node: Arc<WorkerNode>,
 ) -> Result<impl Reply, Rejection> {
@@ -241,48 +261,48 @@ fn cors() -> warp::cors::Cors {
 
 /// 启动 Worker 的 RESTful HTTP 服务
 pub async fn start_worker_http_server(node: Arc<WorkerNode>, port: u16) {
-    // POST /objects/:key  写入对象
+    // POST /:data_type/:key  写入对象
     let node_put = node.clone();
-    let put_route = warp::path!("objects" / String)
+    let put_route = warp::path!(String / String)
         .and(warp::post())
         .and(warp::query::<PutQuery>())
         .and(warp::body::bytes())
         .and(warp::any().map(move || node_put.clone()))
         .and_then(put_handler);
 
-    // GET /objects/:key  读取对象
+    // GET /:data_type/:key  读取对象
     let node_get = node.clone();
-    let get_route = warp::path!("objects" / String)
+    let get_route = warp::path!(String / String)
         .and(warp::get())
         .and(warp::any().map(move || node_get.clone()))
         .and_then(get_handler);
 
-    // DELETE /objects/:key  删除对象
+    // DELETE /:data_type/:key  删除对象
     let node_del = node.clone();
-    let delete_route = warp::path!("objects" / String)
+    let delete_route = warp::path!(String / String)
         .and(warp::delete())
         .and(warp::any().map(move || node_del.clone()))
         .and_then(delete_handler);
 
-    // GET /objects/:key/exists  检查对象是否存在
+    // GET /:data_type/:key/exists  检查对象是否存在
     let node_exists = node.clone();
-    let exists_route = warp::path!("objects" / String / "exists")
+    let exists_route = warp::path!(String / String / "exists")
         .and(warp::get())
         .and(warp::any().map(move || node_exists.clone()))
         .and_then(exists_handler);
 
-    // GET /objects?prefix=xxx&limit=100  按前缀列出对象
+    // GET /:data_type?prefix=xxx&limit=100  按前缀列出对象
     let node_list = node.clone();
-    let list_route = warp::path("objects")
+    let list_route = warp::path!(String)
         .and(warp::path::end())
         .and(warp::get())
         .and(warp::query::<ListQuery>())
         .and(warp::any().map(move || node_list.clone()))
         .and_then(list_handler);
 
-    // POST /objects/batch  批量写入对象
+    // POST /:data_type/batch  批量写入对象
     let node_batch = node.clone();
-    let batch_route = warp::path!("objects" / "batch")
+    let batch_route = warp::path!(String / "batch")
         .and(warp::post())
         .and(warp::body::json())
         .and(warp::any().map(move || node_batch.clone()))

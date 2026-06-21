@@ -23,6 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 value: value.clone(),
                 content_type: "text/plain".to_string(),
                 tags: String::new(),
+                ..Default::default()
             })
             .await?;
 
@@ -37,6 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     value: value.clone(),
                     content_type: "text/plain".to_string(),
                     tags: String::new(),
+                    ..Default::default()
                 })
                 .await?;
             times.push(start.elapsed());
@@ -84,6 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     value,
                     content_type: "text/plain".to_string(),
                     tags: String::new(),
+                    ..Default::default()
                 })
                 .await
                 .expect("concurrent put failed");

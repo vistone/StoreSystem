@@ -29,6 +29,10 @@ pub struct AppConfig {
     /// 分片配置
     #[serde(default)]
     pub shard: ShardConfig,
+
+    /// QuadKey 分片配置
+    #[serde(default)]
+    pub quad_shard: QuadShardConfig,
 }
 
 fn default_mode() -> String {
@@ -397,6 +401,67 @@ impl Default for ShardConfig {
 }
 
 // ============================================================
+// QuadKey 分片配置
+// ============================================================
+
+/// QuadKey 分片配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuadShardConfig {
+    /// 层级 ≤ base_level 时，所有数据存入 base DB
+    #[serde(default = "default_base_level")]
+    pub base_level: u32,
+    /// 层级阈值：base < level < split_level 用 4 位前缀，≥ split_level 用 8 位
+    #[serde(default = "default_split_level")]
+    pub split_level: u32,
+    /// 数据根目录
+    #[serde(default = "default_quad_data_dir")]
+    pub data_dir: String,
+    /// 数据类型子目录
+    #[serde(default = "default_quad_data_type")]
+    pub data_type: String,
+    /// KV 数据库扩展名
+    #[serde(default = "default_kv_ext")]
+    pub kv_ext: String,
+    /// Meta 数据库扩展名
+    #[serde(default = "default_meta_ext")]
+    pub meta_ext: String,
+    /// 缓存大小
+    #[serde(default = "default_cache_size")]
+    pub cache_size: usize,
+    /// 刷盘间隔（毫秒）
+    #[serde(default = "default_flush_interval")]
+    pub flush_interval_ms: u64,
+}
+
+fn default_base_level() -> u32 {
+    8
+}
+fn default_split_level() -> u32 {
+    18
+}
+fn default_quad_data_dir() -> String {
+    "quad_data".to_string()
+}
+fn default_quad_data_type() -> String {
+    "objects".to_string()
+}
+
+impl Default for QuadShardConfig {
+    fn default() -> Self {
+        Self {
+            base_level: default_base_level(),
+            split_level: default_split_level(),
+            data_dir: default_quad_data_dir(),
+            data_type: default_quad_data_type(),
+            kv_ext: default_kv_ext(),
+            meta_ext: default_meta_ext(),
+            cache_size: default_cache_size(),
+            flush_interval_ms: default_flush_interval(),
+        }
+    }
+}
+
+// ============================================================
 // 配置加载
 // ============================================================
 
@@ -404,10 +469,12 @@ impl AppConfig {
     /// 从 YAML 文件加载配置（失败时返回错误而不是静默回退默认值）
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| StoreError::InvalidArgument(format!("读取配置文件 '{}' 失败: {}", path.display(), e)))?;
-        let config = serde_yaml::from_str(&content)
-            .map_err(|e| StoreError::InvalidArgument(format!("解析配置文件 '{}' 失败: {}", path.display(), e)))?;
+        let content = std::fs::read_to_string(path).map_err(|e| {
+            StoreError::InvalidArgument(format!("读取配置文件 '{}' 失败: {}", path.display(), e))
+        })?;
+        let config = serde_yaml::from_str(&content).map_err(|e| {
+            StoreError::InvalidArgument(format!("解析配置文件 '{}' 失败: {}", path.display(), e))
+        })?;
         println!("[Config] 已加载配置文件: {}", path.display());
         Ok(config)
     }
@@ -431,6 +498,7 @@ impl Default for AppConfig {
             worker: WorkerConfig::default(),
             standalone: StandaloneConfig::default(),
             shard: ShardConfig::default(),
+            quad_shard: QuadShardConfig::default(),
         }
     }
 }

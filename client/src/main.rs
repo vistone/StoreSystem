@@ -198,7 +198,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ============ RESTful 测试 ============
     println!("\n🌐 开始 RESTful API 性能测试...");
-    let rest = restful_client::RestfulClient::new("http://localhost:52061");
+    let rest = restful_client::RestfulClient::new("http://localhost:52061", "objects");
     for (size, rounds) in &value_sizes {
         let label = format!("RESTful 单次写入 ({})", fmt_size(*size));
         println!("  ▶ 测试 {} ({}轮)...", label, rounds);
@@ -264,7 +264,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn run_restful_only(mut report: Report) -> Result<(), Box<dyn std::error::Error>> {
     println!("\n🌐 仅运行 RESTful API 性能测试...");
-    let rest = restful_client::RestfulClient::new("http://localhost:52061");
+    let rest = restful_client::RestfulClient::new("http://localhost:52061", "objects");
 
     let value_sizes: Vec<(usize, usize)> = vec![
         (1024, 20),
