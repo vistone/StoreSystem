@@ -1,6 +1,6 @@
+use std::time::{Duration, Instant};
 use store_system::grpc::proto::store_service_client::StoreServiceClient;
-use store_system::grpc::proto::{PutRequest, PutBatchRequest, BatchItem};
-use std::time::{Instant, Duration};
+use store_system::grpc::proto::{BatchItem, PutBatchRequest};
 use tokio::sync::mpsc;
 
 #[tokio::main]
@@ -18,7 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 启动 10 个并发写入任务
     let concurrency = 10;
     let batch_size = 10;
-    let value_sizes: Vec<usize> = vec![1024, 1024 * 1024];  // 去掉 10MB，避免单批过大
+    let value_sizes: Vec<usize> = vec![1024, 1024 * 1024]; // 去掉 10MB，避免单批过大
 
     for worker_id in 0..concurrency {
         let mut store = store.clone();
@@ -90,7 +90,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             println!(
                 "[{:.0}s] 本秒: {:.0} ops/s, {:.1} MB/s | 累计: {} 条, {:.2} MB, 平均 {:.0} ops/s",
-                total_elapsed, ops, mbs, total_count,
+                total_elapsed,
+                ops,
+                mbs,
+                total_count,
                 total_bytes as f64 / 1024.0 / 1024.0,
                 total_count as f64 / total_elapsed
             );

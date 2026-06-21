@@ -1,14 +1,14 @@
 use std::sync::Arc;
 use std::time::Duration;
-use tonic::transport::Server;
 use store_system::{
-    AppConfig, MasterNode, MasterStoreService, MasterAdminService,
-    WorkerNode, WorkerConfig, WorkerService,
-    grpc, http, Store,
-    logger::{LogStore, WorkerLogger, LogLevel, LogCategory},
-    master_admin_http::{AdminContext, start_admin_api},
+    grpc, http,
+    logger::{LogCategory, LogStore, WorkerLogger},
+    master_admin_http::{start_admin_api, AdminContext},
     master_log_ws::MasterLogWsServer,
+    AppConfig, MasterAdminService, MasterNode, MasterStoreService, Store, WorkerConfig, WorkerNode,
+    WorkerService,
 };
+use tonic::transport::Server;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -36,13 +36,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 确定运行模式：命令行 > 配置文件
     let mode = mode.unwrap_or_else(|| config.mode.clone());
 
-
     match mode.as_str() {
         "master" => run_master(&config).await,
         "worker" => run_worker(&config).await,
         "standalone" => run_standalone(&config).await,
         _ => {
-            eprintln!("用法: {} [--config <path>] [master|worker|standalone]", args[0]);
+            eprintln!(
+                "用法: {} [--config <path>] [master|worker|standalone]",
+                args[0]
+            );
             eprintln!();
             eprintln!("  方式一（推荐）：使用专用配置文件");
             eprintln!("    Master:   ./store_system --config master.yaml");
@@ -68,14 +70,12 @@ async fn run_master(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>
     let mc = &config.master;
     let gc = &config.global;
 
-    let master = MasterNode::open(
-        store_system::master::MasterConfig {
-            listen_addr: mc.listen_addr.clone(),
-            meta_path: mc.meta_path.clone(),
-            heartbeat_timeout_secs: mc.heartbeat_timeout_secs,
-            cleanup_interval_secs: mc.cleanup_interval_secs,
-        }
-    )?;
+    let master = MasterNode::open(store_system::master::MasterConfig {
+        listen_addr: mc.listen_addr.clone(),
+        meta_path: mc.meta_path.clone(),
+        heartbeat_timeout_secs: mc.heartbeat_timeout_secs,
+        cleanup_interval_secs: mc.cleanup_interval_secs,
+    })?;
     let master = Arc::new(master);
 
     // 初始化日志存储（SQLite 持久化）
@@ -112,18 +112,22 @@ async fn run_master(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>
     let grpc_server = async {
         Server::builder()
             .add_service(
-                store_system::grpc::proto::store_service_server::StoreServiceServer::new(store_service)
-                    .max_decoding_message_size(max_msg)
-                    .max_encoding_message_size(max_msg)
+                store_system::grpc::proto::store_service_server::StoreServiceServer::new(
+                    store_service,
+                )
+                .max_decoding_message_size(max_msg)
+                .max_encoding_message_size(max_msg),
             )
             .add_service(
-                store_system::grpc::proto::master_service_server::MasterServiceServer::new(admin_service)
-                    .max_decoding_message_size(max_msg)
-                    .max_encoding_message_size(max_msg)
+                store_system::grpc::proto::master_service_server::MasterServiceServer::new(
+                    admin_service,
+                )
+                .max_decoding_message_size(max_msg)
+                .max_encoding_message_size(max_msg),
             )
             .serve(addr)
             .await
-            .expect("gRPC server failed");
+            .map_err(|e| format!("gRPC 服务器错误: {}", e))
     };
 
     // Admin API 服务（为前端提供 RESTful 接口）
@@ -143,8 +147,8 @@ async fn run_master(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>
     println!("   📊 Admin API: http://0.0.0.0:{}", admin_port);
     println!("   📋 Log WS: ws://0.0.0.0:{}", log_ws_port);
 
-    tokio::join!(grpc_server, admin_server, log_ws_server);
-    Ok(())
+    let (grpc_result, _, _) = tokio::join!(grpc_server, admin_server, log_ws_server);
+    grpc_result.map_err(|e| e.into())
 }
 
 /// 启动 Worker 节点
@@ -177,7 +181,14 @@ async fn run_worker(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>
 
     // 根据协议启动对应的服务
     let protocol = &config.global.protocol;
-    let ws_port = wc.listen_addr.rsplit(':').next().unwrap_or("50061").parse::<u16>().unwrap_or(50061) + 1000;
+    let ws_port = wc
+        .listen_addr
+        .rsplit(':')
+        .next()
+        .unwrap_or("50061")
+        .parse::<u16>()
+        .unwrap_or(50061)
+        + 1000;
     let http_port = ws_port + 1000;
 
     // 如果协议是 ws 或 both，启动 WebSocket 服务
@@ -228,12 +239,11 @@ async fn run_worker(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>
     });
 
     // 初始化 Worker 日志采集器（使用持久 WebSocket 连接）
-    let worker_logger = std::sync::Arc::new(WorkerLogger::new(
-        &wc.worker_id,
-        &wc.master_ws_addr,
-    )
-    .with_flush_interval(1000)
-    .with_max_buffer(500));
+    let worker_logger = std::sync::Arc::new(
+        WorkerLogger::new(&wc.worker_id, &wc.master_ws_addr)
+            .with_flush_interval(1000)
+            .with_max_buffer(500),
+    );
 
     // 启动后台持久 WebSocket 连接
     let bg_logger = worker_logger.clone();
@@ -254,12 +264,15 @@ async fn run_worker(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>
     });
 
     // 记录启动日志
-    worker_logger.info(LogCategory::SystemHealth, &format!(
-        "Worker '{}' 启动成功, KV: {}, Meta: {}",
-        wc.worker_id,
-        wc.kv_path().display(),
-        wc.meta_path().display()
-    ));
+    worker_logger.info(
+        LogCategory::SystemHealth,
+        &format!(
+            "Worker '{}' 启动成功, KV: {}, Meta: {}",
+            wc.worker_id,
+            wc.kv_path().display(),
+            wc.meta_path().display()
+        ),
+    );
 
     let max_msg = config.global.max_message_size;
     let addr: std::net::SocketAddr = wc.listen_addr.parse()?;
@@ -272,9 +285,11 @@ async fn run_worker(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>
 
     Server::builder()
         .add_service(
-            store_system::grpc::proto::worker_service_server::WorkerServiceServer::new(worker_service)
-                .max_decoding_message_size(max_msg)
-                .max_encoding_message_size(max_msg)
+            store_system::grpc::proto::worker_service_server::WorkerServiceServer::new(
+                worker_service,
+            )
+            .max_decoding_message_size(max_msg)
+            .max_encoding_message_size(max_msg),
         )
         .serve(addr)
         .await?;
@@ -309,22 +324,32 @@ async fn run_standalone(config: &AppConfig) -> Result<(), Box<dyn std::error::Er
     let grpc_port = sc.grpc_port;
     let max_msg = config.global.max_message_size;
     let grpc_server = async move {
-        let grpc_service = store_system::grpc::proto::store_service_server::StoreServiceServer::new(
-            grpc::GrpcStoreService::new(grpc_store)
-        )
+        let grpc_service =
+            store_system::grpc::proto::store_service_server::StoreServiceServer::new(
+                grpc::GrpcStoreService::new(grpc_store),
+            )
             .max_decoding_message_size(max_msg)
             .max_encoding_message_size(max_msg);
         let addr = ([0, 0, 0, 0], grpc_port).into();
-        println!("🚀 gRPC server running on http://0.0.0.0:{} (max msg: {}MB)", grpc_port, max_msg / (1024 * 1024));
-        Server::builder()
+        println!(
+            "🚀 gRPC server running on http://0.0.0.0:{} (max msg: {}MB)",
+            grpc_port,
+            max_msg / (1024 * 1024)
+        );
+        if let Err(e) = Server::builder()
             .add_service(grpc_service)
             .serve(addr)
             .await
-            .expect("gRPC server failed");
+        {
+            eprintln!("gRPC 服务器退出: {}", e);
+        }
     };
 
     println!("\n🎉 单机模式启动成功！");
-    println!("🌐 RESTful API 地址: http://0.0.0.0:{}/objects", sc.http_port);
+    println!(
+        "🌐 RESTful API 地址: http://0.0.0.0:{}/objects",
+        sc.http_port
+    );
     println!("🚀 gRPC 服务地址: 0.0.0.0:{}", sc.grpc_port);
 
     tokio::join!(http_server, grpc_server);
@@ -332,7 +357,11 @@ async fn run_standalone(config: &AppConfig) -> Result<(), Box<dyn std::error::Er
 }
 
 /// 注册 Worker 到 Master
-async fn register_with_master(master_addr: &str, worker_id: &str, listen_addr: &str) -> Result<(), Box<dyn std::error::Error>> {
+async fn register_with_master(
+    master_addr: &str,
+    worker_id: &str,
+    listen_addr: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     use store_system::grpc::proto::master_service_client::MasterServiceClient;
 
     let endpoint = tonic::transport::Endpoint::from_shared(master_addr.to_string())?
@@ -398,4 +427,3 @@ async fn send_heartbeat(
     client.heartbeat(request).await?;
     Ok(())
 }
-

@@ -1,10 +1,10 @@
+use crate::error::Result;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
-use crate::error::Result;
 
 // ============================================================
 // Master 集群元数据模型
@@ -16,7 +16,7 @@ pub struct WorkerRegistration {
     pub worker_id: String,
     pub address: String,
     pub weight: i32,
-    pub tags_json: String,  // JSON 格式的 tags
+    pub tags_json: String, // JSON 格式的 tags
     pub registered_at: DateTime<Utc>,
     pub last_heartbeat: DateTime<Utc>,
     pub alive: bool,
@@ -64,7 +64,7 @@ pub struct ClusterConfig {
 pub struct ReplicationPolicy {
     pub policy_name: String,
     pub replication_factor: i32,
-    pub strategy: String,  // "all" | "rack" | "custom"
+    pub strategy: String, // "all" | "rack" | "custom"
     pub config_json: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -106,7 +106,7 @@ impl MasterStore {
              PRAGMA cache_size = -8000;
              PRAGMA temp_store = MEMORY;
              PRAGMA busy_timeout = 5000;
-             PRAGMA foreign_keys = ON;"
+             PRAGMA foreign_keys = ON;",
         )?;
 
         // ============================================================
@@ -158,7 +158,10 @@ impl MasterStore {
             let sql = format!("ALTER TABLE workers ADD COLUMN {} {}", col, decl);
             let _ = conn.execute(&sql, []);
         }
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_workers_alive ON workers(alive);", [])?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_workers_alive ON workers(alive);",
+            [],
+        )?;
 
         // ============================================================
         // 2. 路由规则表
@@ -175,7 +178,10 @@ impl MasterStore {
             )",
             [],
         )?;
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_route_worker ON route_rules(worker_id);", [])?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_route_worker ON route_rules(worker_id);",
+            [],
+        )?;
 
         // ============================================================
         // 3. 集群配置表
@@ -207,7 +213,9 @@ impl MasterStore {
             [],
         )?;
 
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     // ============================================================
@@ -246,6 +254,7 @@ impl MasterStore {
     }
 
     /// 更新 Worker 心跳
+    #[allow(clippy::too_many_arguments)]
     pub fn update_heartbeat(
         &self,
         worker_id: &str,
@@ -347,10 +356,22 @@ impl MasterStore {
                 weight: row.get(2)?,
                 tags_json: row.get(3)?,
                 registered_at: DateTime::parse_from_rfc3339(&registered_at_str)
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(e)))?
+                    .map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            4,
+                            rusqlite::types::Type::Text,
+                            Box::new(e),
+                        )
+                    })?
                     .with_timezone(&Utc),
                 last_heartbeat: DateTime::parse_from_rfc3339(&last_heartbeat_str)
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(e)))?
+                    .map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            5,
+                            rusqlite::types::Type::Text,
+                            Box::new(e),
+                        )
+                    })?
                     .with_timezone(&Utc),
                 alive: row.get::<_, i32>(6)? != 0,
                 storage_used_bytes: row.get::<_, i64>(7)? as u64,
@@ -387,9 +408,7 @@ impl MasterStore {
             crate::error::StoreError::InvalidArgument("MasterStore mutex poisoned".to_string())
         })?;
 
-        let mut stmt = conn.prepare(
-            "SELECT * FROM workers WHERE worker_id = ?1"
-        )?;
+        let mut stmt = conn.prepare("SELECT * FROM workers WHERE worker_id = ?1")?;
 
         let result = stmt.query_row(params![worker_id], |row| {
             let registered_at_str: String = row.get(4)?;
@@ -401,10 +420,22 @@ impl MasterStore {
                 weight: row.get(2)?,
                 tags_json: row.get(3)?,
                 registered_at: DateTime::parse_from_rfc3339(&registered_at_str)
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(e)))?
+                    .map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            4,
+                            rusqlite::types::Type::Text,
+                            Box::new(e),
+                        )
+                    })?
                     .with_timezone(&Utc),
                 last_heartbeat: DateTime::parse_from_rfc3339(&last_heartbeat_str)
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(e)))?
+                    .map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            5,
+                            rusqlite::types::Type::Text,
+                            Box::new(e),
+                        )
+                    })?
                     .with_timezone(&Utc),
                 alive: row.get::<_, i32>(6)? != 0,
                 storage_used_bytes: row.get::<_, i64>(7)? as u64,
@@ -474,8 +505,14 @@ impl MasterStore {
         })?;
 
         // 先删除关联的路由规则
-        conn.execute("DELETE FROM route_rules WHERE worker_id = ?1", params![worker_id])?;
-        let rows = conn.execute("DELETE FROM workers WHERE worker_id = ?1", params![worker_id])?;
+        conn.execute(
+            "DELETE FROM route_rules WHERE worker_id = ?1",
+            params![worker_id],
+        )?;
+        let rows = conn.execute(
+            "DELETE FROM workers WHERE worker_id = ?1",
+            params![worker_id],
+        )?;
 
         Ok(rows > 0)
     }
@@ -510,7 +547,10 @@ impl MasterStore {
             crate::error::StoreError::InvalidArgument("MasterStore mutex poisoned".to_string())
         })?;
 
-        let rows = conn.execute("DELETE FROM route_rules WHERE key_prefix = ?1", params![key_prefix])?;
+        let rows = conn.execute(
+            "DELETE FROM route_rules WHERE key_prefix = ?1",
+            params![key_prefix],
+        )?;
         Ok(rows > 0)
     }
 
@@ -522,7 +562,7 @@ impl MasterStore {
 
         let mut stmt = conn.prepare(
             "SELECT key_prefix, worker_id, priority, created_at
-             FROM route_rules ORDER BY priority DESC, key_prefix"
+             FROM route_rules ORDER BY priority DESC, key_prefix",
         )?;
 
         let rules = stmt.query_map([], |row| {
@@ -532,7 +572,13 @@ impl MasterStore {
                 worker_id: row.get(1)?,
                 priority: row.get(2)?,
                 created_at: DateTime::parse_from_rfc3339(&created_at_str)
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e)))?
+                    .map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            3,
+                            rusqlite::types::Type::Text,
+                            Box::new(e),
+                        )
+                    })?
                     .with_timezone(&Utc),
             })
         })?;
@@ -556,7 +602,7 @@ impl MasterStore {
              FROM route_rules
              WHERE ?1 LIKE key_prefix || '%'
              ORDER BY priority DESC, LENGTH(key_prefix) DESC
-             LIMIT 1"
+             LIMIT 1",
         )?;
 
         let result = stmt.query_row(params![key], |row| {
@@ -566,7 +612,13 @@ impl MasterStore {
                 worker_id: row.get(1)?,
                 priority: row.get(2)?,
                 created_at: DateTime::parse_from_rfc3339(&created_at_str)
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e)))?
+                    .map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            3,
+                            rusqlite::types::Type::Text,
+                            Box::new(e),
+                        )
+                    })?
                     .with_timezone(&Utc),
             })
         });
@@ -621,9 +673,8 @@ impl MasterStore {
             crate::error::StoreError::InvalidArgument("MasterStore mutex poisoned".to_string())
         })?;
 
-        let mut stmt = conn.prepare(
-            "SELECT key, value, updated_at FROM cluster_config ORDER BY key"
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT key, value, updated_at FROM cluster_config ORDER BY key")?;
 
         let configs = stmt.query_map([], |row| {
             let updated_at_str: String = row.get(2)?;
@@ -631,7 +682,13 @@ impl MasterStore {
                 key: row.get(0)?,
                 value: row.get(1)?,
                 updated_at: DateTime::parse_from_rfc3339(&updated_at_str)
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e)))?
+                    .map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            2,
+                            rusqlite::types::Type::Text,
+                            Box::new(e),
+                        )
+                    })?
                     .with_timezone(&Utc),
             })
         })?;
@@ -692,7 +749,7 @@ impl MasterStore {
 
         let mut stmt = conn.prepare(
             "SELECT policy_name, replication_factor, strategy, config_json, created_at, updated_at
-             FROM replication_policies ORDER BY policy_name"
+             FROM replication_policies ORDER BY policy_name",
         )?;
 
         let policies = stmt.query_map([], |row| {
@@ -704,10 +761,22 @@ impl MasterStore {
                 strategy: row.get(2)?,
                 config_json: row.get(3)?,
                 created_at: DateTime::parse_from_rfc3339(&created_at_str)
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(e)))?
+                    .map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            4,
+                            rusqlite::types::Type::Text,
+                            Box::new(e),
+                        )
+                    })?
                     .with_timezone(&Utc),
                 updated_at: DateTime::parse_from_rfc3339(&updated_at_str)
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(e)))?
+                    .map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            5,
+                            rusqlite::types::Type::Text,
+                            Box::new(e),
+                        )
+                    })?
                     .with_timezone(&Utc),
             })
         })?;

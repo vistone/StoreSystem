@@ -1,10 +1,10 @@
+use crate::logger::{LogCategory, LogEntry, LogLevel, LogStore};
+use futures_util::SinkExt;
+use futures_util::StreamExt;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
-use futures_util::StreamExt;
-use futures_util::SinkExt;
-use crate::logger::{LogStore, LogEntry, LogLevel, LogCategory};
 
 /// Master 端日志 WebSocket 服务
 ///
@@ -72,7 +72,7 @@ async fn handle_log_connection(
             Ok(Message::Text(text)) => {
                 let response = process_log_message(&text, &store).await;
                 let response_text = serde_json::to_string(&response).unwrap_or_default();
-                if write.send(Message::Text(response_text.into())).await.is_err() {
+                if write.send(Message::Text(response_text)).await.is_err() {
                     break;
                 }
             }
@@ -80,7 +80,7 @@ async fn handle_log_connection(
                 if let Ok(text) = String::from_utf8(data.to_vec()) {
                     let response = process_log_message(&text, &store).await;
                     let response_text = serde_json::to_string(&response).unwrap_or_default();
-                    if write.send(Message::Text(response_text.into())).await.is_err() {
+                    if write.send(Message::Text(response_text)).await.is_err() {
                         break;
                     }
                 }
@@ -126,42 +126,41 @@ async fn process_log_message(text: &str, store: &LogStore) -> LogWsResponse {
             let entries_val = payload["entries"].as_array();
 
             if let Some(entries) = entries_val {
-                let log_entries: Vec<LogEntry> = entries.iter().map(|e| {
-                    let level_str = e["level"].as_str().unwrap_or("info");
-                    let category_str = e["category"].as_str().unwrap_or("custom");
-                    let timestamp_str = e["timestamp"].as_str().unwrap_or("");
+                let log_entries: Vec<LogEntry> = entries
+                    .iter()
+                    .map(|e| {
+                        let level_str = e["level"].as_str().unwrap_or("info");
+                        let category_str = e["category"].as_str().unwrap_or("custom");
+                        let timestamp_str = e["timestamp"].as_str().unwrap_or("");
 
-                    let timestamp = chrono::DateTime::parse_from_rfc3339(timestamp_str)
-                        .map(|dt| dt.with_timezone(&chrono::Utc))
-                        .unwrap_or_else(|_| chrono::Utc::now());
+                        let timestamp = chrono::DateTime::parse_from_rfc3339(timestamp_str)
+                            .map(|dt| dt.with_timezone(&chrono::Utc))
+                            .unwrap_or_else(|_| chrono::Utc::now());
 
-                    LogEntry {
-                        id: 0,
-                        worker_id: worker_id.to_string(),
-                        level: LogLevel::from(level_str),
-                        category: LogCategory::from(category_str),
-                        message: e["message"].as_str().unwrap_or("").to_string(),
-                        detail_json: e["detail_json"].as_str().map(|s| s.to_string()),
-                        timestamp,
-                        acknowledged: false,
-                    }
-                }).collect();
+                        LogEntry {
+                            id: 0,
+                            worker_id: worker_id.to_string(),
+                            level: LogLevel::from(level_str),
+                            category: LogCategory::from(category_str),
+                            message: e["message"].as_str().unwrap_or("").to_string(),
+                            detail_json: e["detail_json"].as_str().map(|s| s.to_string()),
+                            timestamp,
+                            acknowledged: false,
+                        }
+                    })
+                    .collect();
 
                 match store.write_logs_batch(&log_entries) {
-                    Ok(count) => {
-                        LogWsResponse {
-                            status: "ok".to_string(),
-                            message: format!("已接收 {} 条日志", count),
-                            count,
-                        }
-                    }
-                    Err(e) => {
-                        LogWsResponse {
-                            status: "error".to_string(),
-                            message: format!("写入日志失败: {}", e),
-                            count: 0,
-                        }
-                    }
+                    Ok(count) => LogWsResponse {
+                        status: "ok".to_string(),
+                        message: format!("已接收 {} 条日志", count),
+                        count,
+                    },
+                    Err(e) => LogWsResponse {
+                        status: "error".to_string(),
+                        message: format!("写入日志失败: {}", e),
+                        count: 0,
+                    },
                 }
             } else {
                 LogWsResponse {
@@ -185,28 +184,22 @@ async fn process_log_message(text: &str, store: &LogStore) -> LogWsResponse {
                 payload["message"].as_str().unwrap_or(""),
                 payload["detail_json"].as_str(),
             ) {
-                Ok(_) => {
-                    LogWsResponse {
-                        status: "ok".to_string(),
-                        message: "日志已接收".to_string(),
-                        count: 1,
-                    }
-                }
-                Err(e) => {
-                    LogWsResponse {
-                        status: "error".to_string(),
-                        message: format!("写入日志失败: {}", e),
-                        count: 0,
-                    }
-                }
+                Ok(_) => LogWsResponse {
+                    status: "ok".to_string(),
+                    message: "日志已接收".to_string(),
+                    count: 1,
+                },
+                Err(e) => LogWsResponse {
+                    status: "error".to_string(),
+                    message: format!("写入日志失败: {}", e),
+                    count: 0,
+                },
             }
         }
-        _ => {
-            LogWsResponse {
-                status: "error".to_string(),
-                message: format!("未知 action: {}", action),
-                count: 0,
-            }
-        }
+        _ => LogWsResponse {
+            status: "error".to_string(),
+            message: format!("未知 action: {}", action),
+            count: 0,
+        },
     }
 }

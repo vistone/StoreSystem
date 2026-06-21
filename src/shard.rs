@@ -1,13 +1,13 @@
+use crate::error::{Result, StoreError};
+use crate::kv::KvStore;
+use crate::meta::{MetaStore, ObjectMeta};
 use bytes::Bytes;
 use dashmap::DashMap;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use tokio::sync::Notify;
-use crate::error::{Result, StoreError};
-use crate::kv::KvStore;
-use crate::meta::{MetaStore, ObjectMeta};
 
 /// 分片配置：定义单个分片的数据库文件路径、名称和扩展名
 #[derive(Debug, Clone)]
@@ -147,7 +147,9 @@ impl WriteBuffer {
 
     /// 取出所有待刷盘操作（drain 语义）
     fn drain(&self) -> HashMap<String, PendingOp> {
-        let items: Vec<(String, PendingOp)> = self.pending.iter()
+        let items: Vec<(String, PendingOp)> = self
+            .pending
+            .iter()
             .map(|r| (r.key().clone(), r.value().clone()))
             .collect();
         self.pending.clear();
@@ -169,13 +171,17 @@ impl WriteBuffer {
     }
 }
 
+/// Type alias for a custom shard-routing function.
+type ShardRouteFn = Arc<dyn Fn(&str, usize) -> usize + Send + Sync>;
+
 /// 分片路由策略
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub enum ShardStrategy {
     /// 基于 key 哈希取模路由
+    #[default]
     Hash,
     /// 自定义路由函数（Arc 包装以便跨线程共享）
-    Custom(Arc<dyn Fn(&str, usize) -> usize + Send + Sync>),
+    Custom(ShardRouteFn),
 }
 
 impl std::fmt::Debug for ShardStrategy {
@@ -186,13 +192,6 @@ impl std::fmt::Debug for ShardStrategy {
         }
     }
 }
-
-impl Default for ShardStrategy {
-    fn default() -> Self {
-        Self::Hash
-    }
-}
-
 
 /// 分布式存储管理器：管理多个分片，提供统一的读写接口
 #[derive(Debug)]
@@ -215,7 +214,9 @@ impl ShardManager {
     /// 使用分片配置列表创建 ShardManager
     pub fn open(configs: Vec<ShardConfig>, cache_size: usize) -> Result<Self> {
         if configs.is_empty() {
-            return Err(StoreError::InvalidArgument("至少需要一个分片配置".to_string()));
+            return Err(StoreError::InvalidArgument(
+                "至少需要一个分片配置".to_string(),
+            ));
         }
 
         let mut shards = Vec::with_capacity(configs.len());
@@ -252,7 +253,9 @@ impl ShardManager {
         cache_size: usize,
     ) -> Result<Self> {
         if num_shards == 0 {
-            return Err(StoreError::InvalidArgument("分片数量必须大于 0".to_string()));
+            return Err(StoreError::InvalidArgument(
+                "分片数量必须大于 0".to_string(),
+            ));
         }
 
         let configs: Vec<ShardConfig> = (0..num_shards)
@@ -278,22 +281,23 @@ impl ShardManager {
 
     /// 根据 key 路由到目标分片索引
     pub fn route(&self, key: &str) -> usize {
-
         match &self.strategy {
             ShardStrategy::Hash => {
                 let hash = seahash::hash(key.as_bytes());
                 (hash as usize) % self.shards.len()
             }
-            ShardStrategy::Custom(f) => {
-                (f)(key, self.shards.len())
-            }
+            ShardStrategy::Custom(f) => (f)(key, self.shards.len()),
         }
     }
 
     /// 获取指定分片的引用
     pub fn shard(&self, index: usize) -> Result<&Shard> {
         self.shards.get(index).ok_or_else(|| {
-            StoreError::InvalidArgument(format!("分片索引 {} 超出范围 (0..{})", index, self.shards.len()))
+            StoreError::InvalidArgument(format!(
+                "分片索引 {} 超出范围 (0..{})",
+                index,
+                self.shards.len()
+            ))
         })
     }
 
@@ -360,10 +364,8 @@ impl ShardManager {
             loop {
                 wb.notify_flush();
                 tokio::time::sleep(std::time::Duration::from_millis(2)).await;
-                if wb.pending_len() == 0 {
-                    if !wb.flushing.load(Ordering::Acquire) {
-                        break;
-                    }
+                if wb.pending_len() == 0 && !wb.flushing.load(Ordering::Acquire) {
+                    break;
                 }
             }
         }
@@ -371,7 +373,13 @@ impl ShardManager {
     }
 
     /// 写入对象
-    pub async fn put(&self, key: String, value: Bytes, content_type: Option<String>, tags: Option<serde_json::Value>) -> Result<ObjectMeta> {
+    pub async fn put(
+        &self,
+        key: String,
+        value: Bytes,
+        content_type: Option<String>,
+        tags: Option<serde_json::Value>,
+    ) -> Result<ObjectMeta> {
         let shard_idx = self.route(&key);
         let cache = &self.caches[shard_idx];
         let wb = &self.write_buffers[shard_idx];
@@ -384,9 +392,9 @@ impl ShardManager {
             updated_at: now,
             content_type,
             tags,
-        checksum: None,
-        storage_node: None,
-    };
+            checksum: None,
+            storage_node: None,
+        };
 
         // 写入缓存
         if cache.len() < self.cache_size {
@@ -438,7 +446,9 @@ impl ShardManager {
         }
 
         // 查磁盘
-        let value = shard.kv_store.get(key)?
+        let value = shard
+            .kv_store
+            .get(key)?
             .ok_or_else(|| StoreError::KeyNotFound(key.to_string()))?;
         let meta = shard.meta_store.get(key)?;
 
@@ -473,7 +483,7 @@ impl ShardManager {
         if cache.contains_key(key) {
             return Ok(true);
         }
-        Ok(shard.meta_store.exists(key)?)
+        shard.meta_store.exists(key)
     }
 
     /// 按前缀列出对象（跨所有分片扫描）
@@ -518,7 +528,10 @@ impl ShardManager {
     }
 
     /// 批量写入对象
-    pub async fn put_batch(&self, items: Vec<(String, Bytes, Option<String>, Option<serde_json::Value>)>) -> Result<Vec<ObjectMeta>> {
+    pub async fn put_batch(
+        &self,
+        items: Vec<(String, Bytes, Option<String>, Option<serde_json::Value>)>,
+    ) -> Result<Vec<ObjectMeta>> {
         let mut all_metas = Vec::with_capacity(items.len());
         let now = chrono::Utc::now();
 
@@ -534,9 +547,9 @@ impl ShardManager {
                 updated_at: now,
                 content_type,
                 tags,
-        checksum: None,
-        storage_node: None,
-    };
+                checksum: None,
+                storage_node: None,
+            };
 
             if cache.len() < self.cache_size {
                 cache.insert(key.clone(), value.clone());
@@ -550,16 +563,22 @@ impl ShardManager {
 
     /// 获取指定分片的 KvStore 引用
     pub fn kv_store(&self, shard_idx: usize) -> Result<Arc<KvStore>> {
-        Ok(self.shards.get(shard_idx)
+        Ok(self
+            .shards
+            .get(shard_idx)
             .ok_or_else(|| StoreError::InvalidArgument(format!("分片索引 {} 超出范围", shard_idx)))?
-            .kv_store.clone())
+            .kv_store
+            .clone())
     }
 
     /// 获取指定分片的 MetaStore 引用
     pub fn meta_store(&self, shard_idx: usize) -> Result<Arc<MetaStore>> {
-        Ok(self.shards.get(shard_idx)
+        Ok(self
+            .shards
+            .get(shard_idx)
             .ok_or_else(|| StoreError::InvalidArgument(format!("分片索引 {} 超出范围", shard_idx)))?
-            .meta_store.clone())
+            .meta_store
+            .clone())
     }
 }
 

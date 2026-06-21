@@ -1,10 +1,10 @@
-use warp::{Filter, Rejection, Reply, http::StatusCode, reply::WithStatus, reply::Json};
+use crate::error::StoreError;
+use crate::store::Store;
+use base64::{engine::general_purpose, Engine as _};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use crate::store::Store;
-use crate::error::StoreError;
-use base64::{Engine as _, engine::general_purpose};
+use warp::{http::StatusCode, reply::Json, reply::WithStatus, Filter, Rejection, Reply};
 
 #[derive(Debug)]
 struct CustomReject(StatusCode, String);
@@ -90,37 +90,46 @@ async fn put_handler(
     store: Arc<Store>,
 ) -> Result<impl Reply, Rejection> {
     let tags = if let Some(tags_str) = query.tags {
-        Some(serde_json::from_str(&tags_str)
-            .map_err(|_| warp::reject::custom(CustomReject(StatusCode::BAD_REQUEST, "Invalid tags JSON".to_string())))?)
+        Some(serde_json::from_str(&tags_str).map_err(|_| {
+            warp::reject::custom(CustomReject(
+                StatusCode::BAD_REQUEST,
+                "Invalid tags JSON".to_string(),
+            ))
+        })?)
     } else {
         None
     };
 
-    let meta = store.put(
-        key,
-        body,
-        query.content_type,
-        tags
-    ).await.map_err(|e| match e {
-        StoreError::InvalidArgument(_) => warp::reject::custom(CustomReject(StatusCode::BAD_REQUEST, "Invalid argument".to_string())),
-        _ => warp::reject::custom(CustomReject(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string())),
-    })?;
+    let meta = store
+        .put(key, body, query.content_type, tags)
+        .await
+        .map_err(|e| match e {
+            StoreError::InvalidArgument(_) => warp::reject::custom(CustomReject(
+                StatusCode::BAD_REQUEST,
+                "Invalid argument".to_string(),
+            )),
+            _ => warp::reject::custom(CustomReject(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal server error".to_string(),
+            )),
+        })?;
 
     Ok(warp::reply::json(&PutResponse {
-        meta: convert_meta(meta)
+        meta: convert_meta(meta),
     }))
 }
 
-async fn get_handler(
-    key: String,
-    store: Arc<Store>,
-) -> Result<impl Reply, Rejection> {
-    let (value, meta) = store.get(&key)
-        .await
-        .map_err(|e| match e {
-            StoreError::KeyNotFound(_) => warp::reject::custom(CustomReject(StatusCode::NOT_FOUND, "Key not found".to_string())),
-            _ => warp::reject::custom(CustomReject(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string())),
-        })?;
+async fn get_handler(key: String, store: Arc<Store>) -> Result<impl Reply, Rejection> {
+    let (value, meta) = store.get(&key).await.map_err(|e| match e {
+        StoreError::KeyNotFound(_) => warp::reject::custom(CustomReject(
+            StatusCode::NOT_FOUND,
+            "Key not found".to_string(),
+        )),
+        _ => warp::reject::custom(CustomReject(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal server error".to_string(),
+        )),
+    })?;
 
     Ok(warp::reply::json(&GetResponse {
         meta: convert_meta(meta),
@@ -128,42 +137,44 @@ async fn get_handler(
     }))
 }
 
-async fn delete_handler(
-    key: String,
-    store: Arc<Store>,
-) -> Result<impl Reply, Rejection> {
-    store.delete(&key)
-        .await
-        .map_err(|_| warp::reject::custom(CustomReject(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string())))?;
+async fn delete_handler(key: String, store: Arc<Store>) -> Result<impl Reply, Rejection> {
+    store.delete(&key).await.map_err(|_| {
+        warp::reject::custom(CustomReject(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal server error".to_string(),
+        ))
+    })?;
 
     Ok(warp::reply::json(&DeleteResponse { success: true }))
 }
 
-async fn exists_handler(
-    key: String,
-    store: Arc<Store>,
-) -> Result<impl Reply, Rejection> {
-    let exists = store.exists(&key)
-        .await
-        .map_err(|_| warp::reject::custom(CustomReject(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string())))?;
+async fn exists_handler(key: String, store: Arc<Store>) -> Result<impl Reply, Rejection> {
+    let exists = store.exists(&key).await.map_err(|_| {
+        warp::reject::custom(CustomReject(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal server error".to_string(),
+        ))
+    })?;
 
     Ok(warp::reply::json(&ExistsResponse { exists }))
 }
 
-async fn list_handler(
-    query: ListQuery,
-    store: Arc<Store>,
-) -> Result<impl Reply, Rejection> {
+async fn list_handler(query: ListQuery, store: Arc<Store>) -> Result<impl Reply, Rejection> {
     let prefix = query.prefix.unwrap_or_default();
     let limit = query.limit.unwrap_or(100) as usize;
 
-    let metas = store.list(&prefix, limit)
-        .await
-        .map_err(|_| warp::reject::custom(CustomReject(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string())))?;
+    let metas = store.list(&prefix, limit).await.map_err(|_| {
+        warp::reject::custom(CustomReject(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal server error".to_string(),
+        ))
+    })?;
 
     let response_metas = metas.into_iter().map(convert_meta).collect();
 
-    Ok(warp::reply::json(&ListResponse { metas: response_metas }))
+    Ok(warp::reply::json(&ListResponse {
+        metas: response_metas,
+    }))
 }
 
 async fn put_batch_handler(
@@ -172,24 +183,28 @@ async fn put_batch_handler(
 ) -> Result<impl Reply, Rejection> {
     let mut items = Vec::with_capacity(req.items.len());
     for item in req.items {
-        let value = general_purpose::STANDARD.decode(&item.value)
-            .map_err(|_| warp::reject::custom(CustomReject(StatusCode::BAD_REQUEST, "Invalid base64 value".to_string())))?;
+        let value = general_purpose::STANDARD.decode(&item.value).map_err(|_| {
+            warp::reject::custom(CustomReject(
+                StatusCode::BAD_REQUEST,
+                "Invalid base64 value".to_string(),
+            ))
+        })?;
 
-        items.push((
-            item.key,
-            Bytes::from(value),
-            item.content_type,
-            item.tags
-        ));
+        items.push((item.key, Bytes::from(value), item.content_type, item.tags));
     }
 
-    let metas = store.put_batch(items)
-        .await
-        .map_err(|_| warp::reject::custom(CustomReject(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string())))?;
+    let metas = store.put_batch(items).await.map_err(|_| {
+        warp::reject::custom(CustomReject(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal server error".to_string(),
+        ))
+    })?;
 
     let response_metas = metas.into_iter().map(convert_meta).collect();
 
-    Ok(warp::reply::json(&ListResponse { metas: response_metas }))
+    Ok(warp::reply::json(&ListResponse {
+        metas: response_metas,
+    }))
 }
 
 /// CORS 配置：允许跨域请求
@@ -197,11 +212,7 @@ fn cors() -> warp::cors::Cors {
     warp::cors()
         .allow_any_origin()
         .allow_methods(vec!["GET", "POST", "DELETE", "PUT", "OPTIONS"])
-        .allow_headers(vec![
-            "Content-Type",
-            "Authorization",
-            "X-Requested-With",
-        ])
+        .allow_headers(vec!["Content-Type", "Authorization", "X-Requested-With"])
         .build()
 }
 
@@ -263,17 +274,18 @@ pub async fn start_server(store: Store, port: u16) {
         .or(delete_route)
         .with(cors())
         .recover(|err: Rejection| async move {
-            let result: Result<WithStatus<Json>, Rejection> = if let Some(custom) = err.find::<CustomReject>() {
-                Ok(warp::reply::with_status(
-                    warp::reply::json(&serde_json::json!({"error": custom.1})),
-                    custom.0,
-                ))
-            } else {
-                Ok(warp::reply::with_status(
-                    warp::reply::json(&serde_json::json!({"error": "Internal Server Error"})),
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                ))
-            };
+            let result: Result<WithStatus<Json>, Rejection> =
+                if let Some(custom) = err.find::<CustomReject>() {
+                    Ok(warp::reply::with_status(
+                        warp::reply::json(&serde_json::json!({"error": custom.1})),
+                        custom.0,
+                    ))
+                } else {
+                    Ok(warp::reply::with_status(
+                        warp::reply::json(&serde_json::json!({"error": "Internal Server Error"})),
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                    ))
+                };
             result
         });
 

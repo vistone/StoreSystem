@@ -100,8 +100,8 @@ impl HealthInfo {
     fn get_disk_usage(data_dir: impl AsRef<Path>) -> (u64, u64) {
         #[cfg(target_os = "linux")]
         {
-            use std::mem::MaybeUninit;
             use std::ffi::CString;
+            use std::mem::MaybeUninit;
 
             let path = data_dir.as_ref();
             // 确保目录存在
@@ -115,8 +115,8 @@ impl HealthInfo {
             unsafe {
                 let mut stat: libc::statvfs = MaybeUninit::zeroed().assume_init();
                 if libc::statvfs(c_path.as_ptr(), &mut stat) == 0 {
-                    let total = stat.f_blocks as u64 * stat.f_frsize as u64;
-                    let available = stat.f_bavail as u64 * stat.f_frsize as u64;
+                    let total = stat.f_blocks * stat.f_frsize;
+                    let available = stat.f_bavail * stat.f_frsize;
                     let used = total - available;
                     return (used, total);
                 }

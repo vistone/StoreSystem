@@ -1,8 +1,8 @@
-use std::sync::Arc;
-use warp::{Filter, Rejection, Reply, http::StatusCode};
-use serde::{Deserialize, Serialize};
+use crate::logger::{LogCategory, LogLevel, LogQuery, LogStore};
 use crate::master::MasterNode;
-use crate::logger::{LogStore, LogQuery, LogLevel, LogCategory};
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use warp::{http::StatusCode, Filter, Rejection, Reply};
 
 // ============================================================
 // Master 管理 RESTful API
@@ -37,11 +37,19 @@ pub struct ApiResponse<T: Serialize> {
 
 impl<T: Serialize> ApiResponse<T> {
     pub fn ok(data: T) -> Self {
-        Self { success: true, data: Some(data), error: None }
+        Self {
+            success: true,
+            data: Some(data),
+            error: None,
+        }
     }
 
     pub fn err(msg: impl Into<String>) -> Self {
-        Self { success: false, data: None, error: Some(msg.into()) }
+        Self {
+            success: false,
+            data: None,
+            error: Some(msg.into()),
+        }
     }
 }
 
@@ -154,7 +162,6 @@ pub struct RouteRuleResponse {
     pub created_at: String,
 }
 
-
 // ============================================================
 // 错误处理
 // ============================================================
@@ -186,11 +193,7 @@ fn cors() -> warp::cors::Cors {
     warp::cors()
         .allow_any_origin()
         .allow_methods(vec!["GET", "POST", "DELETE", "PUT", "OPTIONS"])
-        .allow_headers(vec![
-            "Content-Type",
-            "Authorization",
-            "X-Requested-With",
-        ])
+        .allow_headers(vec!["Content-Type", "Authorization", "X-Requested-With"])
         .build()
 }
 
@@ -337,7 +340,12 @@ async fn handle_overview(ctx: Arc<AdminContext>) -> Result<impl Reply, Rejection
     let used_memory_bytes: u64 = workers.iter().map(|w| w.memory_used_bytes).sum();
 
     let avg_cpu_usage = if alive_workers > 0 {
-        workers.iter().filter(|w| w.alive).map(|w| w.cpu_usage_ratio).sum::<f64>() / alive_workers as f64
+        workers
+            .iter()
+            .filter(|w| w.alive)
+            .map(|w| w.cpu_usage_ratio)
+            .sum::<f64>()
+            / alive_workers as f64
     } else {
         0.0
     };
@@ -377,9 +385,14 @@ async fn handle_worker_detail(
 ) -> Result<impl Reply, Rejection> {
     let workers = ctx.master.list_workers(false).await;
     if let Some(worker) = workers.into_iter().find(|w| w.worker_id == worker_id) {
-        Ok(warp::reply::json(&ApiResponse::ok(WorkerNodeInfo::from(worker))))
+        Ok(warp::reply::json(&ApiResponse::ok(WorkerNodeInfo::from(
+            worker,
+        ))))
     } else {
-        Err(warp::reject::custom(AdminReject(format!("Worker {} not found", worker_id))))
+        Err(warp::reject::custom(AdminReject(format!(
+            "Worker {} not found",
+            worker_id
+        ))))
     }
 }
 
@@ -387,39 +400,45 @@ async fn handle_query_logs(
     params: LogQueryParams,
     ctx: Arc<AdminContext>,
 ) -> Result<impl Reply, Rejection> {
-    let mut query = LogQuery::default();
-    query.worker_id = params.worker_id;
-    query.level = params.level.as_ref().map(|s| LogLevel::from(s.as_str()));
-    query.category = params.category.as_ref().map(|s| LogCategory::from(s.as_str()));
-    query.keyword = params.keyword;
-    query.unread_only = params.unread_only.unwrap_or(false);
-    query.limit = params.limit.unwrap_or(100);
-    query.offset = params.offset.unwrap_or(0);
-
-    if let Some(start) = params.start_time {
-        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&start) {
-            query.start_time = Some(dt.with_timezone(&chrono::Utc));
-        }
-    }
-    if let Some(end) = params.end_time {
-        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&end) {
-            query.end_time = Some(dt.with_timezone(&chrono::Utc));
-        }
-    }
+    let query = LogQuery {
+        worker_id: params.worker_id,
+        level: params.level.as_ref().map(|s| LogLevel::from(s.as_str())),
+        category: params
+            .category
+            .as_ref()
+            .map(|s| LogCategory::from(s.as_str())),
+        keyword: params.keyword,
+        unread_only: params.unread_only.unwrap_or(false),
+        limit: params.limit.unwrap_or(100),
+        offset: params.offset.unwrap_or(0),
+        start_time: params
+            .start_time
+            .as_deref()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc)),
+        end_time: params
+            .end_time
+            .as_deref()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc)),
+    };
 
     match ctx.log_store.query_logs(&query) {
         Ok(entries) => {
             let total = ctx.log_store.count_logs(&query).unwrap_or(0);
-            let responses: Vec<LogEntryResponse> = entries.into_iter().map(|e| LogEntryResponse {
-                id: e.id,
-                worker_id: e.worker_id,
-                level: e.level.to_string(),
-                category: e.category.to_string(),
-                message: e.message,
-                detail_json: e.detail_json,
-                timestamp: e.timestamp.to_rfc3339(),
-                acknowledged: e.acknowledged,
-            }).collect();
+            let responses: Vec<LogEntryResponse> = entries
+                .into_iter()
+                .map(|e| LogEntryResponse {
+                    id: e.id,
+                    worker_id: e.worker_id,
+                    level: e.level.to_string(),
+                    category: e.category.to_string(),
+                    message: e.message,
+                    detail_json: e.detail_json,
+                    timestamp: e.timestamp.to_rfc3339(),
+                    acknowledged: e.acknowledged,
+                })
+                .collect();
 
             Ok(warp::reply::json(&serde_json::json!({
                 "success": true,
@@ -452,19 +471,25 @@ async fn handle_recent_errors(
     params: std::collections::HashMap<String, String>,
     ctx: Arc<AdminContext>,
 ) -> Result<impl Reply, Rejection> {
-    let limit = params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(50);
+    let limit = params
+        .get("limit")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(50);
     match ctx.log_store.get_recent_errors(limit) {
         Ok(entries) => {
-            let responses: Vec<LogEntryResponse> = entries.into_iter().map(|e| LogEntryResponse {
-                id: e.id,
-                worker_id: e.worker_id,
-                level: e.level.to_string(),
-                category: e.category.to_string(),
-                message: e.message,
-                detail_json: e.detail_json,
-                timestamp: e.timestamp.to_rfc3339(),
-                acknowledged: e.acknowledged,
-            }).collect();
+            let responses: Vec<LogEntryResponse> = entries
+                .into_iter()
+                .map(|e| LogEntryResponse {
+                    id: e.id,
+                    worker_id: e.worker_id,
+                    level: e.level.to_string(),
+                    category: e.category.to_string(),
+                    message: e.message,
+                    detail_json: e.detail_json,
+                    timestamp: e.timestamp.to_rfc3339(),
+                    acknowledged: e.acknowledged,
+                })
+                .collect();
             Ok(warp::reply::json(&ApiResponse::ok(responses)))
         }
         Err(e) => Ok(warp::reply::json(&ApiResponse::<()>::err(e.to_string()))),
@@ -477,7 +502,10 @@ async fn handle_acknowledge_log(
 ) -> Result<impl Reply, Rejection> {
     match ctx.log_store.acknowledge_log(log_id) {
         Ok(true) => Ok(warp::reply::json(&ApiResponse::ok(true))),
-        Ok(false) => Err(warp::reject::custom(AdminReject(format!("Log {} not found", log_id)))),
+        Ok(false) => Err(warp::reject::custom(AdminReject(format!(
+            "Log {} not found",
+            log_id
+        )))),
         Err(e) => Ok(warp::reply::json(&ApiResponse::<()>::err(e.to_string()))),
     }
 }
@@ -501,15 +529,17 @@ async fn handle_acknowledge_all(ctx: Arc<AdminContext>) -> Result<impl Reply, Re
 
 async fn handle_list_routes(ctx: Arc<AdminContext>) -> Result<impl Reply, Rejection> {
     let rules = ctx.master.store.list_route_rules().unwrap_or_default();
-    let responses: Vec<RouteRuleResponse> = rules.into_iter().map(|r| RouteRuleResponse {
-        key_prefix: r.key_prefix,
-        worker_id: r.worker_id,
-        priority: r.priority,
-        created_at: r.created_at.to_rfc3339(),
-    }).collect();
+    let responses: Vec<RouteRuleResponse> = rules
+        .into_iter()
+        .map(|r| RouteRuleResponse {
+            key_prefix: r.key_prefix,
+            worker_id: r.worker_id,
+            priority: r.priority,
+            created_at: r.created_at.to_rfc3339(),
+        })
+        .collect();
     Ok(warp::reply::json(&ApiResponse::ok(responses)))
 }
-
 
 async fn handle_health_check(ctx: Arc<AdminContext>) -> Result<impl Reply, Rejection> {
     let workers = ctx.master.list_workers(false).await;
@@ -527,7 +557,7 @@ async fn handle_health_check(ctx: Arc<AdminContext>) -> Result<impl Reply, Rejec
 }
 
 async fn handle_log_ws_connection(ws: warp::ws::WebSocket, ctx: Arc<AdminContext>) {
-    use futures_util::{StreamExt, SinkExt};
+    use futures_util::{SinkExt, StreamExt};
     let (mut tx, mut rx) = ws.split();
 
     // 定期推送最新日志
@@ -538,8 +568,7 @@ async fn handle_log_ws_connection(ws: warp::ws::WebSocket, ctx: Arc<AdminContext
         tokio::select! {
             _ = interval.tick() => {
                 // 查询新日志
-                let mut query = LogQuery::default();
-                query.limit = 50;
+                let query = LogQuery { limit: 50, ..Default::default() };
                 if let Ok(entries) = ctx.log_store.query_logs(&query) {
                     let new_entries: Vec<LogEntryResponse> = entries.into_iter()
                         .filter(|e| e.id > last_id)

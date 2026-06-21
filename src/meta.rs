@@ -1,9 +1,9 @@
+use crate::error::Result;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Mutex;
-use crate::error::Result;
 
 // ============================================================
 // 数据模型
@@ -89,7 +89,7 @@ impl MetaStore {
              PRAGMA cache_size = -20000;
              PRAGMA temp_store = MEMORY;
              PRAGMA busy_timeout = 5000;
-             PRAGMA foreign_keys = ON;"
+             PRAGMA foreign_keys = ON;",
         )?;
 
         // ============================================================
@@ -113,10 +113,22 @@ impl MetaStore {
         )?;
 
         // 明细表索引：加速按各种条件的查询
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_meta_size ON object_meta(size);", [])?;
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_meta_content_type ON object_meta(content_type);", [])?;
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_meta_created_at ON object_meta(created_at);", [])?;
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_meta_updated_at ON object_meta(updated_at);", [])?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_meta_size ON object_meta(size);",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_meta_content_type ON object_meta(content_type);",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_meta_created_at ON object_meta(created_at);",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_meta_updated_at ON object_meta(updated_at);",
+            [],
+        )?;
 
         // ============================================================
         // 2. 按内容类型统计表（聚合）
@@ -179,9 +191,14 @@ impl MetaStore {
             )",
             [],
         )?;
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_tag_obj_key ON tag_index(obj_key);", [])?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tag_obj_key ON tag_index(obj_key);",
+            [],
+        )?;
 
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     // ============================================================
@@ -206,11 +223,13 @@ impl MetaStore {
         let tx = conn.unchecked_transaction()?;
 
         // 获取旧记录（用于更新聚合统计时做差值）
-        let old_size: Option<i64> = tx.query_row(
-            "SELECT size FROM object_meta WHERE key = ?1",
-            params![meta.key],
-            |row| row.get(0),
-        ).ok();
+        let old_size: Option<i64> = tx
+            .query_row(
+                "SELECT size FROM object_meta WHERE key = ?1",
+                params![meta.key],
+                |row| row.get(0),
+            )
+            .ok();
 
         // 1. 写入/更新明细
         tx.execute(
@@ -312,7 +331,10 @@ impl MetaStore {
         if let Some(ref tags) = meta.tags {
             if let Some(obj) = tags.as_object() {
                 // 先删除旧标签
-                tx.execute("DELETE FROM tag_index WHERE obj_key = ?1", params![meta.key])?;
+                tx.execute(
+                    "DELETE FROM tag_index WHERE obj_key = ?1",
+                    params![meta.key],
+                )?;
                 // 再插入新标签
                 for (k, v) in obj {
                     let val_str = match v {
@@ -338,7 +360,7 @@ impl MetaStore {
         })?;
         let mut stmt = conn.prepare(
             "SELECT key, size, created_at, updated_at, content_type, tags, checksum, storage_node
-             FROM object_meta WHERE key = ?1"
+             FROM object_meta WHERE key = ?1",
         )?;
 
         let meta = stmt.query_row(params![key], |row| {
@@ -349,10 +371,22 @@ impl MetaStore {
                 key: row.get(0)?,
                 size: row.get::<_, i64>(1)? as u64,
                 created_at: DateTime::parse_from_rfc3339(&created_at_str)
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e)))?
+                    .map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            2,
+                            rusqlite::types::Type::Text,
+                            Box::new(e),
+                        )
+                    })?
                     .with_timezone(&Utc),
                 updated_at: DateTime::parse_from_rfc3339(&updated_at_str)
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e)))?
+                    .map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            3,
+                            rusqlite::types::Type::Text,
+                            Box::new(e),
+                        )
+                    })?
                     .with_timezone(&Utc),
                 content_type: row.get(4)?,
                 tags: row.get(5)?,
@@ -373,16 +407,18 @@ impl MetaStore {
         let tx = conn.unchecked_transaction()?;
 
         // 获取旧记录信息（用于更新聚合统计）
-        let old: Option<(i64, Option<String>, String)> = tx.query_row(
-            "SELECT size, content_type, created_at FROM object_meta WHERE key = ?1",
-            params![key],
-            |row| {
-                let size: i64 = row.get(0)?;
-                let ct: Option<String> = row.get(1)?;
-                let created: String = row.get(2)?;
-                Ok((size, ct, created))
-            },
-        ).ok();
+        let old: Option<(i64, Option<String>, String)> = tx
+            .query_row(
+                "SELECT size, content_type, created_at FROM object_meta WHERE key = ?1",
+                params![key],
+                |row| {
+                    let size: i64 = row.get(0)?;
+                    let ct: Option<String> = row.get(1)?;
+                    let created: String = row.get(2)?;
+                    Ok((size, ct, created))
+                },
+            )
+            .ok();
 
         // 删除明细
         tx.execute("DELETE FROM object_meta WHERE key = ?1", params![key])?;
@@ -454,7 +490,7 @@ impl MetaStore {
              FROM object_meta
              WHERE key LIKE ?1
              ORDER BY key
-             LIMIT ?2"
+             LIMIT ?2",
         )?;
 
         let pattern = format!("{}%", prefix);
@@ -466,10 +502,22 @@ impl MetaStore {
                 key: row.get(0)?,
                 size: row.get::<_, i64>(1)? as u64,
                 created_at: DateTime::parse_from_rfc3339(&created_at_str)
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e)))?
+                    .map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            2,
+                            rusqlite::types::Type::Text,
+                            Box::new(e),
+                        )
+                    })?
                     .with_timezone(&Utc),
                 updated_at: DateTime::parse_from_rfc3339(&updated_at_str)
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e)))?
+                    .map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            3,
+                            rusqlite::types::Type::Text,
+                            Box::new(e),
+                        )
+                    })?
                     .with_timezone(&Utc),
                 content_type: row.get(4)?,
                 tags: row.get(5)?,
@@ -537,55 +585,79 @@ impl MetaStore {
         // 按类型统计
         let mut stmt = conn.prepare(
             "SELECT content_type, count, total_size, min_size, max_size, updated_at
-             FROM stats_by_type WHERE count > 0 ORDER BY total_size DESC"
+             FROM stats_by_type WHERE count > 0 ORDER BY total_size DESC",
         )?;
-        let by_type: Vec<StatsByType> = stmt.query_map([], |row| {
-            let updated_at_str: String = row.get(5)?;
-            Ok(StatsByType {
-                content_type: row.get(0)?,
-                count: row.get(1)?,
-                total_size: row.get(2)?,
-                min_size: row.get(3)?,
-                max_size: row.get(4)?,
-                updated_at: DateTime::parse_from_rfc3339(&updated_at_str)
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(e)))?
-                    .with_timezone(&Utc),
-            })
-        })?.collect::<std::result::Result<Vec<_>, _>>()?;
+        let by_type: Vec<StatsByType> = stmt
+            .query_map([], |row| {
+                let updated_at_str: String = row.get(5)?;
+                Ok(StatsByType {
+                    content_type: row.get(0)?,
+                    count: row.get(1)?,
+                    total_size: row.get(2)?,
+                    min_size: row.get(3)?,
+                    max_size: row.get(4)?,
+                    updated_at: DateTime::parse_from_rfc3339(&updated_at_str)
+                        .map_err(|e| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                5,
+                                rusqlite::types::Type::Text,
+                                Box::new(e),
+                            )
+                        })?
+                        .with_timezone(&Utc),
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
         // 按天统计
         let mut stmt = conn.prepare(
             "SELECT date, count, total_size, updated_at
-             FROM stats_by_day WHERE count > 0 ORDER BY date DESC LIMIT 365"
+             FROM stats_by_day WHERE count > 0 ORDER BY date DESC LIMIT 365",
         )?;
-        let by_day: Vec<StatsByDay> = stmt.query_map([], |row| {
-            let updated_at_str: String = row.get(3)?;
-            Ok(StatsByDay {
-                date: row.get(0)?,
-                count: row.get(1)?,
-                total_size: row.get(2)?,
-                updated_at: DateTime::parse_from_rfc3339(&updated_at_str)
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e)))?
-                    .with_timezone(&Utc),
-            })
-        })?.collect::<std::result::Result<Vec<_>, _>>()?;
+        let by_day: Vec<StatsByDay> = stmt
+            .query_map([], |row| {
+                let updated_at_str: String = row.get(3)?;
+                Ok(StatsByDay {
+                    date: row.get(0)?,
+                    count: row.get(1)?,
+                    total_size: row.get(2)?,
+                    updated_at: DateTime::parse_from_rfc3339(&updated_at_str)
+                        .map_err(|e| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                3,
+                                rusqlite::types::Type::Text,
+                                Box::new(e),
+                            )
+                        })?
+                        .with_timezone(&Utc),
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
         // 按前缀统计
         let mut stmt = conn.prepare(
             "SELECT prefix, count, total_size, updated_at
-             FROM stats_by_prefix WHERE count > 0 ORDER BY total_size DESC LIMIT 100"
+             FROM stats_by_prefix WHERE count > 0 ORDER BY total_size DESC LIMIT 100",
         )?;
-        let by_prefix: Vec<StatsByPrefix> = stmt.query_map([], |row| {
-            let updated_at_str: String = row.get(3)?;
-            Ok(StatsByPrefix {
-                prefix: row.get(0)?,
-                count: row.get(1)?,
-                total_size: row.get(2)?,
-                updated_at: DateTime::parse_from_rfc3339(&updated_at_str)
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e)))?
-                    .with_timezone(&Utc),
-            })
-        })?.collect::<std::result::Result<Vec<_>, _>>()?;
+        let by_prefix: Vec<StatsByPrefix> = stmt
+            .query_map([], |row| {
+                let updated_at_str: String = row.get(3)?;
+                Ok(StatsByPrefix {
+                    prefix: row.get(0)?,
+                    count: row.get(1)?,
+                    total_size: row.get(2)?,
+                    updated_at: DateTime::parse_from_rfc3339(&updated_at_str)
+                        .map_err(|e| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                3,
+                                rusqlite::types::Type::Text,
+                                Box::new(e),
+                            )
+                        })?
+                        .with_timezone(&Utc),
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(StatsSummary {
             total_objects,
@@ -603,21 +675,29 @@ impl MetaStore {
         })?;
         let mut stmt = conn.prepare(
             "SELECT content_type, count, total_size, min_size, max_size, updated_at
-             FROM stats_by_type WHERE count > 0 ORDER BY total_size DESC"
+             FROM stats_by_type WHERE count > 0 ORDER BY total_size DESC",
         )?;
-        let results = stmt.query_map([], |row| {
-            let updated_at_str: String = row.get(5)?;
-            Ok(StatsByType {
-                content_type: row.get(0)?,
-                count: row.get(1)?,
-                total_size: row.get(2)?,
-                min_size: row.get(3)?,
-                max_size: row.get(4)?,
-                updated_at: DateTime::parse_from_rfc3339(&updated_at_str)
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(e)))?
-                    .with_timezone(&Utc),
-            })
-        })?.collect::<std::result::Result<Vec<_>, _>>()?;
+        let results = stmt
+            .query_map([], |row| {
+                let updated_at_str: String = row.get(5)?;
+                Ok(StatsByType {
+                    content_type: row.get(0)?,
+                    count: row.get(1)?,
+                    total_size: row.get(2)?,
+                    min_size: row.get(3)?,
+                    max_size: row.get(4)?,
+                    updated_at: DateTime::parse_from_rfc3339(&updated_at_str)
+                        .map_err(|e| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                5,
+                                rusqlite::types::Type::Text,
+                                Box::new(e),
+                            )
+                        })?
+                        .with_timezone(&Utc),
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(results)
     }
 
@@ -628,38 +708,55 @@ impl MetaStore {
         })?;
         let mut stmt = conn.prepare(
             "SELECT date, count, total_size, updated_at
-             FROM stats_by_day WHERE count > 0 ORDER BY date DESC LIMIT ?1"
+             FROM stats_by_day WHERE count > 0 ORDER BY date DESC LIMIT ?1",
         )?;
-        let results = stmt.query_map(params![limit as i64], |row| {
-            let updated_at_str: String = row.get(3)?;
-            Ok(StatsByDay {
-                date: row.get(0)?,
-                count: row.get(1)?,
-                total_size: row.get(2)?,
-                updated_at: DateTime::parse_from_rfc3339(&updated_at_str)
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e)))?
-                    .with_timezone(&Utc),
-            })
-        })?.collect::<std::result::Result<Vec<_>, _>>()?;
+        let results = stmt
+            .query_map(params![limit as i64], |row| {
+                let updated_at_str: String = row.get(3)?;
+                Ok(StatsByDay {
+                    date: row.get(0)?,
+                    count: row.get(1)?,
+                    total_size: row.get(2)?,
+                    updated_at: DateTime::parse_from_rfc3339(&updated_at_str)
+                        .map_err(|e| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                3,
+                                rusqlite::types::Type::Text,
+                                Box::new(e),
+                            )
+                        })?
+                        .with_timezone(&Utc),
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(results)
     }
 
     /// 按前缀查询统计
-    pub fn get_stats_by_prefix(&self, prefix_filter: Option<&str>, limit: usize) -> Result<Vec<StatsByPrefix>> {
+    pub fn get_stats_by_prefix(
+        &self,
+        prefix_filter: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<StatsByPrefix>> {
         let conn = self.conn.lock().map_err(|_| {
             crate::error::StoreError::InvalidArgument("MetaStore mutex poisoned".to_string())
         })?;
 
-        let (sql, param): (&str, Box<dyn rusqlite::types::ToSql>) = if let Some(pf) = prefix_filter {
-            ("SELECT prefix, count, total_size, updated_at
+        let (sql, param): (&str, Box<dyn rusqlite::types::ToSql>) = if let Some(pf) = prefix_filter
+        {
+            (
+                "SELECT prefix, count, total_size, updated_at
               FROM stats_by_prefix WHERE prefix LIKE ?1 AND count > 0
               ORDER BY total_size DESC LIMIT ?2",
-             Box::new(format!("{}%", pf)))
+                Box::new(format!("{}%", pf)),
+            )
         } else {
-            ("SELECT prefix, count, total_size, updated_at
+            (
+                "SELECT prefix, count, total_size, updated_at
               FROM stats_by_prefix WHERE count > 0
               ORDER BY total_size DESC LIMIT ?1",
-             Box::new(limit as i64))
+                Box::new(limit as i64),
+            )
         };
 
         let mut stmt = conn.prepare(sql)?;
@@ -671,10 +768,17 @@ impl MetaStore {
                     count: row.get(1)?,
                     total_size: row.get(2)?,
                     updated_at: DateTime::parse_from_rfc3339(&updated_at_str)
-                        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e)))?
+                        .map_err(|e| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                3,
+                                rusqlite::types::Type::Text,
+                                Box::new(e),
+                            )
+                        })?
                         .with_timezone(&Utc),
                 })
-            })?.collect::<std::result::Result<Vec<_>, _>>()?
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?
         } else {
             stmt.query_map(params![limit as i64], |row| {
                 let updated_at_str: String = row.get(3)?;
@@ -683,10 +787,17 @@ impl MetaStore {
                     count: row.get(1)?,
                     total_size: row.get(2)?,
                     updated_at: DateTime::parse_from_rfc3339(&updated_at_str)
-                        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e)))?
+                        .map_err(|e| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                3,
+                                rusqlite::types::Type::Text,
+                                Box::new(e),
+                            )
+                        })?
                         .with_timezone(&Utc),
                 })
-            })?.collect::<std::result::Result<Vec<_>, _>>()?
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?
         };
         Ok(results)
     }
@@ -695,7 +806,12 @@ impl MetaStore {
     ///
     /// 这是 KV 数据库完全无法支持的功能。
     /// 例如：查找所有 tag_key="user" AND tag_value="alice" 的对象
-    pub fn query_by_tag(&self, tag_key: &str, tag_value: &str, limit: usize) -> Result<Vec<ObjectMeta>> {
+    pub fn query_by_tag(
+        &self,
+        tag_key: &str,
+        tag_value: &str,
+        limit: usize,
+    ) -> Result<Vec<ObjectMeta>> {
         let conn = self.conn.lock().map_err(|_| {
             crate::error::StoreError::InvalidArgument("MetaStore mutex poisoned".to_string())
         })?;
@@ -716,10 +832,22 @@ impl MetaStore {
                 key: row.get(0)?,
                 size: row.get::<_, i64>(1)? as u64,
                 created_at: DateTime::parse_from_rfc3339(&created_at_str)
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e)))?
+                    .map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            2,
+                            rusqlite::types::Type::Text,
+                            Box::new(e),
+                        )
+                    })?
                     .with_timezone(&Utc),
                 updated_at: DateTime::parse_from_rfc3339(&updated_at_str)
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e)))?
+                    .map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            3,
+                            rusqlite::types::Type::Text,
+                            Box::new(e),
+                        )
+                    })?
                     .with_timezone(&Utc),
                 content_type: row.get(4)?,
                 tags: row.get(5)?,
@@ -739,7 +867,12 @@ impl MetaStore {
     ///
     /// KV 数据库无法按大小过滤。
     /// 例如：查找所有大于 10MB 的对象
-    pub fn query_by_size_range(&self, min_size: Option<u64>, max_size: Option<u64>, limit: usize) -> Result<Vec<ObjectMeta>> {
+    pub fn query_by_size_range(
+        &self,
+        min_size: Option<u64>,
+        max_size: Option<u64>,
+        limit: usize,
+    ) -> Result<Vec<ObjectMeta>> {
         let conn = self.conn.lock().map_err(|_| {
             crate::error::StoreError::InvalidArgument("MetaStore mutex poisoned".to_string())
         })?;
@@ -771,26 +904,41 @@ impl MetaStore {
         };
 
         let mut stmt = conn.prepare(&sql)?;
-        let params_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
-        let metas = stmt.query_map(params_refs.as_slice(), |row| {
-            let created_at_str: String = row.get(2)?;
-            let updated_at_str: String = row.get(3)?;
+        let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params_vec.iter().map(|p| p.as_ref()).collect();
+        let metas = stmt
+            .query_map(params_refs.as_slice(), |row| {
+                let created_at_str: String = row.get(2)?;
+                let updated_at_str: String = row.get(3)?;
 
-            Ok(ObjectMeta {
-                key: row.get(0)?,
-                size: row.get::<_, i64>(1)? as u64,
-                created_at: DateTime::parse_from_rfc3339(&created_at_str)
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e)))?
-                    .with_timezone(&Utc),
-                updated_at: DateTime::parse_from_rfc3339(&updated_at_str)
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e)))?
-                    .with_timezone(&Utc),
-                content_type: row.get(4)?,
-                tags: row.get(5)?,
-                checksum: row.get(6)?,
-                storage_node: row.get(7)?,
-            })
-        })?.collect::<std::result::Result<Vec<_>, _>>()?;
+                Ok(ObjectMeta {
+                    key: row.get(0)?,
+                    size: row.get::<_, i64>(1)? as u64,
+                    created_at: DateTime::parse_from_rfc3339(&created_at_str)
+                        .map_err(|e| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                2,
+                                rusqlite::types::Type::Text,
+                                Box::new(e),
+                            )
+                        })?
+                        .with_timezone(&Utc),
+                    updated_at: DateTime::parse_from_rfc3339(&updated_at_str)
+                        .map_err(|e| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                3,
+                                rusqlite::types::Type::Text,
+                                Box::new(e),
+                            )
+                        })?
+                        .with_timezone(&Utc),
+                    content_type: row.get(4)?,
+                    tags: row.get(5)?,
+                    checksum: row.get(6)?,
+                    storage_node: row.get(7)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(metas)
     }
@@ -799,7 +947,12 @@ impl MetaStore {
     ///
     /// KV 数据库无法按时间过滤。
     /// 例如：查找 2026-06-01 之后创建的所有对象
-    pub fn query_by_time_range(&self, start: &DateTime<Utc>, end: &DateTime<Utc>, limit: usize) -> Result<Vec<ObjectMeta>> {
+    pub fn query_by_time_range(
+        &self,
+        start: &DateTime<Utc>,
+        end: &DateTime<Utc>,
+        limit: usize,
+    ) -> Result<Vec<ObjectMeta>> {
         let conn = self.conn.lock().map_err(|_| {
             crate::error::StoreError::InvalidArgument("MetaStore mutex poisoned".to_string())
         })?;
@@ -808,7 +961,7 @@ impl MetaStore {
              FROM object_meta
              WHERE created_at >= ?1 AND created_at <= ?2
              ORDER BY created_at DESC
-             LIMIT ?3"
+             LIMIT ?3",
         )?;
 
         let metas = stmt.query_map(
@@ -821,10 +974,22 @@ impl MetaStore {
                     key: row.get(0)?,
                     size: row.get::<_, i64>(1)? as u64,
                     created_at: DateTime::parse_from_rfc3339(&created_at_str)
-                        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e)))?
+                        .map_err(|e| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                2,
+                                rusqlite::types::Type::Text,
+                                Box::new(e),
+                            )
+                        })?
                         .with_timezone(&Utc),
                     updated_at: DateTime::parse_from_rfc3339(&updated_at_str)
-                        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e)))?
+                        .map_err(|e| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                3,
+                                rusqlite::types::Type::Text,
+                                Box::new(e),
+                            )
+                        })?
                         .with_timezone(&Utc),
                     content_type: row.get(4)?,
                     tags: row.get(5)?,
@@ -854,10 +1019,5 @@ impl MetaStore {
 /// - "docs/report.pdf" → "docs/"
 /// - "plain_key" → None
 fn extract_prefix(key: &str) -> Option<String> {
-    if let Some(pos) = key.find('/') {
-        Some(key[..=pos].to_string())
-    } else {
-        None
-    }
+    key.find('/').map(|pos| key[..=pos].to_string())
 }
-
