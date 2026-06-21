@@ -220,9 +220,17 @@ async fn run_worker(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>
     };
 
     println!("   注册到 Master: {}/{}", master_addr_http, wc.worker_id);
+    println!("   QuadKey 区域: {}", wc.region);
     // 注册到 Master（带重试，应对 Master 启动延迟）
     for retry in 0..10 {
-        match register_with_master(&master_addr_http, &wc.worker_id, &wc.listen_addr).await {
+        match register_with_master(
+            &master_addr_http,
+            &wc.worker_id,
+            &wc.listen_addr,
+            &wc.region,
+        )
+        .await
+        {
             Ok(_) => {
                 println!("   ✅ 注册成功");
                 break;
@@ -378,6 +386,7 @@ async fn register_with_master(
     master_addr: &str,
     worker_id: &str,
     listen_addr: &str,
+    region: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use store_system::grpc::proto::master_service_client::MasterServiceClient;
 
@@ -392,6 +401,7 @@ async fn register_with_master(
         address: listen_addr.to_string(),
         weight: 1,
         tags: std::collections::HashMap::new(),
+        region: region.to_string(),
     });
 
     client.register_worker(request).await?;

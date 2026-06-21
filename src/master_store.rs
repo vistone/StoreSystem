@@ -17,6 +17,7 @@ pub struct WorkerRegistration {
     pub address: String,
     pub weight: i32,
     pub tags_json: String, // JSON 格式的 tags
+    pub region: String,    // Worker 负责的 quadkey 区域 (0/1/2/3)
     pub registered_at: DateTime<Utc>,
     pub last_heartbeat: DateTime<Utc>,
     pub alive: bool,
@@ -139,7 +140,8 @@ impl MasterStore {
                 pending_count         INTEGER NOT NULL DEFAULT 0,
                 pending_bytes         INTEGER NOT NULL DEFAULT 0,
                 write_rate_per_sec    REAL NOT NULL DEFAULT 0.0,
-                write_bytes_per_sec   REAL NOT NULL DEFAULT 0.0
+                write_bytes_per_sec   REAL NOT NULL DEFAULT 0.0,
+                region               TEXT NOT NULL DEFAULT '0'
             )",
             [],
         )?;
@@ -158,6 +160,11 @@ impl MasterStore {
             let sql = format!("ALTER TABLE workers ADD COLUMN {} {}", col, decl);
             let _ = conn.execute(&sql, []);
         }
+        // 兼容旧库：region 列
+        let _ = conn.execute(
+            "ALTER TABLE workers ADD COLUMN region TEXT NOT NULL DEFAULT '0'",
+            [],
+        );
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_workers_alive ON workers(alive);",
             [],
@@ -229,6 +236,7 @@ impl MasterStore {
         address: &str,
         weight: i32,
         tags: &HashMap<String, String>,
+        region: &str,
     ) -> Result<()> {
         let conn = self.conn.lock().map_err(|_| {
             crate::error::StoreError::InvalidArgument("MasterStore mutex poisoned".to_string())
@@ -239,15 +247,16 @@ impl MasterStore {
 
         conn.execute(
             "INSERT INTO workers
-             (worker_id, address, weight, tags_json, registered_at, last_heartbeat, alive)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)
+             (worker_id, address, weight, tags_json, registered_at, last_heartbeat, alive, region)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7)
              ON CONFLICT(worker_id) DO UPDATE SET
                 address = ?2,
                 weight = ?3,
                 tags_json = ?4,
                 alive = 1,
-                last_heartbeat = ?6",
-            params![worker_id, address, weight, tags_json, now, now],
+                last_heartbeat = ?6,
+                region = ?7",
+            params![worker_id, address, weight, tags_json, now, now, region],
         )?;
 
         Ok(())
@@ -392,6 +401,7 @@ impl MasterStore {
                 pending_bytes: row.get::<_, i64>(22)? as u64,
                 write_rate_per_sec: row.get(23)?,
                 write_bytes_per_sec: row.get(24)?,
+                region: row.get(25)?,
             })
         })?;
 
@@ -456,6 +466,7 @@ impl MasterStore {
                 pending_bytes: row.get::<_, i64>(22)? as u64,
                 write_rate_per_sec: row.get(23)?,
                 write_bytes_per_sec: row.get(24)?,
+                region: row.get(25)?,
             })
         });
 

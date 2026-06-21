@@ -1,6 +1,6 @@
 # Store System
 
-**版本**: 0.1.1
+**版本**: 0.1.5
 
 一个高性能的嵌入式键值存储系统，基于 bbolt (jammdb) + SQLite 双存储引擎，提供 gRPC 和 RESTful 双接口，支持写合并优化、WAL 原子写入、副本故障转移和大 Value（最大 100MB）读写。
 
@@ -16,6 +16,10 @@
 - **批量事务**：元数据批量写入用真正的单事务提交 (put_batch_txn)
 - **零拷贝优化**：gRPC 读取直接传递 protobuf bytes，避免字节拷贝
 - **多节点集群**：Master-Worker 架构，支持动态注册/心跳/故障检测
+- **QuadKey 区域路由**：按 quadkey[0] 将数据分流到 4 个区域 Worker，互不交叉
+- **QuadKey 分片存储**：level≤8→base, 8<level<18→4位前缀, level≥18→8位前缀
+- **动态数据类型路由**：RESTful `/{data_type}/{key}` 替代硬编码 `/objects/`
+- **Master 统一配置**：kv_name/kv_ext/cache_size 等由 Master 统一下发 Worker
 - **分片存储**：ShardManager 支持数据分片，独立 WAL 恢复
 - **健康监控**：CPU/内存/磁盘使用率实时采集，心跳上报
 - **日志采集**：Worker 日志通过 WebSocket 推送至 Master，SQLite 持久化
@@ -94,26 +98,28 @@ cargo build --release
 - RESTful 服务：`http://0.0.0.0:8080`
 - 数据目录：`data/`（自动创建）
 
-### 集群模式启动
+### 集群模式启动（QuadKey 4 区域）
 
 ```bash
 # 终端 1: 启动 Master
 ./target/release/store_system --config master.yaml
 
-# 终端 2: 启动 Worker-1
-./target/release/store_system --config worker.yaml
-
-# 终端 3: 启动 Worker-2
-./target/release/store_system --config worker2.yaml
+# 终端 2-5: 启动 4 个区域 Worker
+./target/release/store_system --config worker-0.yaml
+./target/release/store_system --config worker-1.yaml
+./target/release/store_system --config worker-2.yaml
+./target/release/store_system --config worker-3.yaml
 ```
 
 集群启动后端口分布：
 
-| 节点 | gRPC | RESTful | WebSocket | Admin API |
-|------|------|---------|-----------|-----------|
-| Master | 50051 | — | 50053 (日志) | 50052 |
-| Worker-1 | 50061 | 52061 | 51061 | — |
-| Worker-2 | 50062 | 52062 | 51062 | — |
+| 节点 | region | gRPC | RESTful | 负责数据 |
+|------|:------:|------|---------|---------|
+| Master | — | 50051 | — | 路由分流 |
+| Worker-0 | 0 | 50061 | 52061 | quadkey 0xxx |
+| Worker-1 | 1 | 50062 | 52062 | quadkey 1xxx |
+| Worker-2 | 2 | 50063 | 52063 | quadkey 2xxx |
+| Worker-3 | 3 | 50064 | 52064 | quadkey 3xxx |
 
 ### 运行性能测试
 
@@ -139,12 +145,12 @@ cargo build --release --bin fault_test
 
 | 方法 | 请求 | 响应 | 说明 |
 |------|------|------|------|
-| `Put` | `PutRequest{key, value, content_type, tags}` | `PutResponse{meta}` | 写入单条 |
-| `Get` | `GetRequest{key}` | `GetResponse{value, meta}` | 读取单条 |
-| `Delete` | `DeleteRequest{key}` | `DeleteResponse{success}` | 删除单条 |
-| `Exists` | `ExistsRequest{key}` | `ExistsResponse{exists}` | 检查存在 |
-| `List` | `ListRequest{prefix, limit}` | `ListResponse{metas}` | 按前缀列表 |
-| `PutBatch` | `PutBatchRequest{items[]}` | `PutBatchResponse{metas[]}` | 批量写入 |
+| `Put` | `PutRequest{key, value, content_type, tags, quadkey?, level?}` | `PutResponse{meta}` | quadkey非空→区域路由，空→哈希路由 |
+| `Get` | `GetRequest{key, quadkey?, level?}` | `GetResponse{value, meta}` | 同上 |
+| `Delete` | `DeleteRequest{key, quadkey?, level?}` | `DeleteResponse{success}` | 同上 |
+| `Exists` | `ExistsRequest{key, quadkey?, level?}` | `ExistsResponse{exists}` | 同上 |
+| `List` | `ListRequest{prefix, limit, quadkey?, level?}` | `ListResponse{metas}` | 同上 |
+| `PutBatch` | `PutBatchRequest{items[]}` | `PutBatchResponse{metas[]}` | items[] 每条含 quadkey, level |
 
 ### Master 管理接口 (gRPC)
 
@@ -157,13 +163,15 @@ cargo build --release --bin fault_test
 
 ### RESTful 接口
 
+路径模板：`/{data_type}/{key}?quadkey=&level=...`
+
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `POST` | `/objects/{key}?content_type=...` | 写入（body 为 raw bytes） |
-| `GET` | `/objects/{key}` | 读取（返回 JSON，value 为 base64） |
-| `DELETE` | `/objects/{key}` | 删除 |
-| `GET` | `/objects?prefix=...&limit=...` | 列表 |
-| `POST` | `/objects/batch` | 批量写入（JSON body） |
+| `POST` | `/{type}/{key}?quadkey=&level=&content_type=...` | 写入，quadkey可选 |
+| `GET` | `/{type}/{key}?quadkey=&level=` | 读取 |
+| `DELETE` | `/{type}/{key}?quadkey=&level=` | 删除 |
+| `GET` | `/{type}?prefix=&limit=&quadkey=&level=` | 列表 |
+| `POST` | `/{type}/batch` | 批量写入 |
 
 ### Master Admin API (RESTful)
 
@@ -243,23 +251,29 @@ Worker-1 (主副本)                    Worker-2 (备副本)
 ┌─────────────────────────────────────────────────┐
 │              gRPC (tonic) + RESTful (warp)       │
 │                      ↓                          │
-│              Master (路由 + 副本)                │
-│         ┌──────────────┴──────────────┐         │
-│         ▼                             ▼         │
-│    Worker-1                       Worker-2      │
-│  ┌─────────────┐ ┌──────────────┐              │
-│  │  LRU 读缓存 │ │ 写合并缓冲区  │              │
-│  │   (moka)   │ │ (WriteBuffer) │              │
-│  └─────────────┘ └──────┬───────┘              │
-│                         │ 后台刷盘 (WAL三步)     │
-│  ┌──────────────────────┴─────────────────────┐ │
-│  │  KvStore (jammdb)  +  MetaStore (SQLite)   │ │
-│  │    B+树 KV 数据      元数据 + WAL 日志       │ │
-│  └────────────────────────────────────────────┘ │
+│              Master (quadkey[0]区域路由)         │
+│    ┌──────┬──────┬──────┬──────┐                │
+│    ▼      ▼      ▼      ▼                      │
+│    W-0   W-1   W-2   W-3   (4 区域 Worker)     │
+│  region0 region1 region2 region3                │
+│    │      │      │      │                       │
+│ 0xxx   1xxx   2xxx   3xxx  (quadkey分区)        │
+│  ┌────────────────────────────┐                 │
+│  │  LRU + WriteBuffer + WAL   │                 │
+│  │  KvStore + MetaStore       │                 │
+│  └────────────────────────────┘                 │
 └─────────────────────────────────────────────────┘
 ```
 
-## v0.1.1 性能指标
+### QuadKey 分片路径规则
+
+| 层级 | DB 名 | 路径示例 |
+|:----:|-------|---------|
+| ≤ 8 | `base` | `{dir}/{type}/base.kv` |
+| 9-17 | quadkey[..4] | `{dir}/{type}/12/3021.kv` |
+| ≥ 18 | quadkey[..8] | `{dir}/{type}/20/30211234.kv` |
+
+## v0.1.5 性能指标
 
 ### 测试环境
 
@@ -269,7 +283,7 @@ Worker-1 (主副本)                    Worker-2 (备副本)
 | **Rust 版本** | 1.96+ |
 | **CPU** | x86_64 |
 | **测试日期** | 2026-06-21 |
-| **集群** | Master + 2 Workers |
+| **集群** | Master + 4 Workers (QuadKey区域) |
 
 ### 完整性能测试报告
 

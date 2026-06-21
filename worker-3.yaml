@@ -1,0 +1,14 @@
+# Worker-3 — quadkey 区域 3
+mode: worker
+global:
+  max_message_size: 268435456
+  protocol: "both"
+worker:
+  worker_id: "worker-3"
+  region: "3"
+  listen_addr: "0.0.0.0:50064"
+  master_addr: "http://127.0.0.1:50051"
+  data_dir: "worker_data/worker-3"
+  heartbeat_interval_secs: 10
+  weight: 1
+  master_ws_addr: "127.0.0.1:50053"

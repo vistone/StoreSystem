@@ -129,6 +129,7 @@ message RegisterWorkerRequest {
   string worker_id = 1; // Worker 唯一标识
   string address = 2; // Worker 地址，如 "192.168.1.10:50061"
   int32 weight = 3; // 权重，用于负载均衡
+  string region = 5; // Worker 负责的 quadkey 区域 (0/1/2/3)
   map<string, string> tags = 4; // 自定义标签
 }
 
@@ -201,6 +202,7 @@ message WorkerInfo {
   uint64 pending_bytes = 22; // 待刷盘字节数
   double write_rate_per_sec = 23; // 写入速率 ops/sec
   double write_bytes_per_sec = 24; // 写入带宽 bytes/sec
+  string region = 25; // Worker 负责的 quadkey 区域 (0/1/2/3)
 }
 
 message ListWorkersResponse {

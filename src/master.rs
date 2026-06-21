@@ -25,6 +25,8 @@ pub struct WorkerInfo {
     pub storage_capacity_bytes: u64,
     pub active_connections: u32,
     pub tags: HashMap<String, String>,
+    /// Worker 负责的 quadkey 区域 (0/1/2/3)
+    pub region: String,
     // ---- 健康监控字段 ----
     pub storage_usage_ratio: f64,
     pub disk_health: String,
@@ -153,6 +155,7 @@ impl MasterNode {
                         storage_capacity_bytes: reg.storage_capacity_bytes,
                         active_connections: reg.active_connections,
                         tags,
+                        region: reg.region.clone(),
                         storage_usage_ratio: reg.storage_usage_ratio,
                         disk_health: reg.disk_health,
                         memory_used_bytes: reg.memory_used_bytes,
@@ -193,14 +196,16 @@ impl MasterNode {
         address: &str,
         weight: i32,
         tags: HashMap<String, String>,
+        region: &str,
     ) -> Result<()> {
         // 先写入 SQLite 持久化（用 spawn_blocking 包装同步 I/O）
         let store = self.store.clone();
         let wid = worker_id.to_string();
         let addr = address.to_string();
         let tags_clone = tags.clone();
+        let region_clone = region.to_string();
         tokio::task::spawn_blocking(move || {
-            store.register_worker(&wid, &addr, weight, &tags_clone)
+            store.register_worker(&wid, &addr, weight, &tags_clone, &region_clone)
         })
         .await
         .map_err(|e| StoreError::InvalidArgument(format!("spawn_blocking 失败: {}", e)))??;
@@ -224,6 +229,7 @@ impl MasterNode {
                 storage_capacity_bytes: 0,
                 active_connections: 0,
                 tags,
+                region: region.to_string(),
                 storage_usage_ratio: 0.0,
                 disk_health: "Unknown".to_string(),
                 memory_used_bytes: 0,
@@ -354,6 +360,28 @@ impl MasterNode {
         Ok((*best).clone())
     }
 
+    /// 按 quadkey 首字符路由到对应区域的 Worker
+    pub async fn route_by_quadkey(&self, quadkey: &str) -> Result<WorkerInfo> {
+        let region = if quadkey.is_empty() {
+            "0"
+        } else {
+            &quadkey[0..1]
+        };
+        let workers = self.workers.read().await;
+        let target: Vec<&WorkerInfo> = workers
+            .values()
+            .filter(|w| w.region == region && w.alive)
+            .collect();
+
+        if target.is_empty() {
+            return Err(StoreError::InvalidArgument(format!(
+                "quadkey 区域 '{}' 无可用 Worker",
+                region
+            )));
+        }
+        Ok(target[0].clone())
+    }
+
     /// 路由到主副本 + 备副本（Rendezvous Hashing 排序取前 2）
     ///
     /// 返回 (primary, optional_secondary)。
@@ -388,7 +416,7 @@ impl MasterNode {
     }
 
     /// 获取 Worker 的 gRPC 客户端
-    async fn get_worker_client(
+    pub(crate) async fn get_worker_client(
         &self,
         address: &str,
     ) -> Result<proto::worker_service_client::WorkerServiceClient<tonic::transport::Channel>> {
@@ -958,6 +986,7 @@ fn proto_to_object_meta(meta_proto: proto::ObjectMeta) -> Result<ObjectMeta> {
 // ============================================================
 
 /// 对外 StoreService 实现（客户端 -> Master）
+/// 对外存储服务（客户端 -> Master -> Worker）
 #[derive(Debug, Clone)]
 pub struct MasterStoreService {
     master: Arc<MasterNode>,
@@ -973,6 +1002,214 @@ impl MasterStoreService {
     pub fn new_arc(master: Arc<MasterNode>) -> Self {
         Self { master }
     }
+
+    /// 通过 quadkey 路由到区域 Worker 并发起 put 请求
+    async fn put_via_quadkey(
+        &self,
+        req: proto::PutRequest,
+    ) -> std::result::Result<Response<proto::PutResponse>, Status> {
+        let worker = self
+            .master
+            .route_by_quadkey(&req.quadkey)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        let mut client = self
+            .master
+            .get_worker_client(&worker.address)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        let request = tonic::Request::new(proto::PutRequest {
+            key: req.key,
+            value: req.value,
+            content_type: req.content_type,
+            tags: req.tags,
+            quadkey: req.quadkey,
+            level: req.level,
+        });
+
+        let response = client
+            .put(request)
+            .await
+            .map_err(|e| Status::internal(format!("Worker put 失败: {}", e)))?;
+
+        Ok(Response::new(response.into_inner()))
+    }
+
+    /// 通过 quadkey 路由到区域 Worker 并发起 get 请求
+    async fn get_via_quadkey(
+        &self,
+        req: proto::GetRequest,
+    ) -> std::result::Result<Response<proto::GetResponse>, Status> {
+        let worker = self
+            .master
+            .route_by_quadkey(&req.quadkey)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        let mut client = self
+            .master
+            .get_worker_client(&worker.address)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        let request = tonic::Request::new(proto::GetRequest {
+            key: req.key,
+            quadkey: req.quadkey,
+            level: req.level,
+        });
+
+        let response = client
+            .get(request)
+            .await
+            .map_err(|e| Status::internal(format!("Worker get 失败: {}", e)))?;
+
+        Ok(Response::new(response.into_inner()))
+    }
+
+    /// 通过 quadkey 路由到区域 Worker 并发起 delete 请求
+    async fn delete_via_quadkey(
+        &self,
+        req: proto::DeleteRequest,
+    ) -> std::result::Result<Response<proto::DeleteResponse>, Status> {
+        let worker = self
+            .master
+            .route_by_quadkey(&req.quadkey)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        let mut client = self
+            .master
+            .get_worker_client(&worker.address)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        let request = tonic::Request::new(proto::DeleteRequest {
+            key: req.key,
+            quadkey: req.quadkey,
+            level: req.level,
+        });
+
+        let response = client
+            .delete(request)
+            .await
+            .map_err(|e| Status::internal(format!("Worker delete 失败: {}", e)))?;
+
+        Ok(Response::new(response.into_inner()))
+    }
+
+    /// 通过 quadkey 路由到区域 Worker 并发起 exists 请求
+    async fn exists_via_quadkey(
+        &self,
+        req: proto::ExistsRequest,
+    ) -> std::result::Result<Response<proto::ExistsResponse>, Status> {
+        let worker = self
+            .master
+            .route_by_quadkey(&req.quadkey)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        let mut client = self
+            .master
+            .get_worker_client(&worker.address)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        let request = tonic::Request::new(proto::ExistsRequest {
+            key: req.key,
+            quadkey: req.quadkey,
+            level: req.level,
+        });
+
+        let response = client
+            .exists(request)
+            .await
+            .map_err(|e| Status::internal(format!("Worker exists 失败: {}", e)))?;
+
+        Ok(Response::new(response.into_inner()))
+    }
+
+    /// 通过 quadkey 路由到区域 Worker 并发起 list 请求
+    async fn list_via_quadkey(
+        &self,
+        req: proto::ListRequest,
+    ) -> std::result::Result<Response<proto::ListResponse>, Status> {
+        let worker = self
+            .master
+            .route_by_quadkey(&req.quadkey)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        let mut client = self
+            .master
+            .get_worker_client(&worker.address)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        let request = tonic::Request::new(proto::ListRequest {
+            prefix: req.prefix,
+            limit: req.limit,
+            quadkey: req.quadkey,
+            level: req.level,
+        });
+
+        let response = client
+            .list(request)
+            .await
+            .map_err(|e| Status::internal(format!("Worker list 失败: {}", e)))?;
+
+        Ok(Response::new(response.into_inner()))
+    }
+
+    /// 通过 quadkey 路由到区域 Worker 并发起 put_batch 请求
+    async fn put_batch_via_quadkey(
+        &self,
+        req: proto::PutBatchRequest,
+    ) -> std::result::Result<Response<proto::PutBatchResponse>, Status> {
+        use std::collections::HashMap;
+
+        // 按 quadkey 首字符（region）分组
+        let mut region_items: HashMap<String, Vec<proto::BatchItem>> = HashMap::new();
+        for item in req.items {
+            let region = if item.quadkey.is_empty() {
+                "0".to_string()
+            } else {
+                item.quadkey[0..1].to_string()
+            };
+            region_items.entry(region).or_default().push(item);
+        }
+
+        let mut all_metas = Vec::new();
+
+        for (region, items) in region_items {
+            let worker = self
+                .master
+                .route_by_quadkey(&region)
+                .await
+                .map_err(|e| Status::internal(e.to_string()))?;
+
+            let mut client = self
+                .master
+                .get_worker_client(&worker.address)
+                .await
+                .map_err(|e| Status::internal(e.to_string()))?;
+
+            let request = tonic::Request::new(proto::PutBatchRequest {
+                items: items.clone(),
+            });
+
+            let response = client
+                .put_batch(request)
+                .await
+                .map_err(|e| Status::internal(format!("Worker put_batch 失败: {}", e)))?;
+
+            let metas = response.into_inner().metas;
+            all_metas.extend(metas);
+        }
+
+        Ok(Response::new(proto::PutBatchResponse { metas: all_metas }))
+    }
 }
 
 #[tonic::async_trait]
@@ -982,6 +1219,12 @@ impl proto::store_service_server::StoreService for MasterStoreService {
         request: Request<proto::PutRequest>,
     ) -> std::result::Result<Response<proto::PutResponse>, Status> {
         let req = request.into_inner();
+
+        // QuadKey 区域路由优先
+        if !req.quadkey.is_empty() {
+            return self.put_via_quadkey(req).await;
+        }
+
         let value = Bytes::from(req.value);
 
         let content_type = if req.content_type.is_empty() {
@@ -1022,6 +1265,11 @@ impl proto::store_service_server::StoreService for MasterStoreService {
     ) -> std::result::Result<Response<proto::GetResponse>, Status> {
         let req = request.into_inner();
 
+        // QuadKey 区域路由优先
+        if !req.quadkey.is_empty() {
+            return self.get_via_quadkey(req).await;
+        }
+
         let (value, meta) = self.master.get(&req.key).await.map_err(|e| match e {
             StoreError::KeyNotFound(_) => Status::not_found(format!("Key not found: {}", req.key)),
             _ => Status::internal(e.to_string()),
@@ -1046,6 +1294,11 @@ impl proto::store_service_server::StoreService for MasterStoreService {
     ) -> std::result::Result<Response<proto::DeleteResponse>, Status> {
         let req = request.into_inner();
 
+        // QuadKey 区域路由优先
+        if !req.quadkey.is_empty() {
+            return self.delete_via_quadkey(req).await;
+        }
+
         self.master
             .delete(&req.key)
             .await
@@ -1059,6 +1312,11 @@ impl proto::store_service_server::StoreService for MasterStoreService {
         request: Request<proto::ExistsRequest>,
     ) -> std::result::Result<Response<proto::ExistsResponse>, Status> {
         let req = request.into_inner();
+
+        // QuadKey 区域路由优先
+        if !req.quadkey.is_empty() {
+            return self.exists_via_quadkey(req).await;
+        }
 
         let exists = self
             .master
@@ -1074,6 +1332,11 @@ impl proto::store_service_server::StoreService for MasterStoreService {
         request: Request<proto::ListRequest>,
     ) -> std::result::Result<Response<proto::ListResponse>, Status> {
         let req = request.into_inner();
+
+        // QuadKey 区域路由优先
+        if !req.quadkey.is_empty() {
+            return self.list_via_quadkey(req).await;
+        }
 
         let metas = self
             .master
@@ -1101,6 +1364,12 @@ impl proto::store_service_server::StoreService for MasterStoreService {
         request: Request<proto::PutBatchRequest>,
     ) -> std::result::Result<Response<proto::PutBatchResponse>, Status> {
         let req = request.into_inner();
+
+        // QuadKey 区域路由优先
+        let has_quadkey = req.items.iter().any(|i| !i.quadkey.is_empty());
+        if has_quadkey {
+            return self.put_batch_via_quadkey(req).await;
+        }
 
         let mut items = Vec::with_capacity(req.items.len());
         for item in req.items {
@@ -1172,7 +1441,13 @@ impl proto::master_service_server::MasterService for MasterAdminService {
         let req = request.into_inner();
 
         self.master
-            .register_worker(&req.worker_id, &req.address, req.weight, req.tags)
+            .register_worker(
+                &req.worker_id,
+                &req.address,
+                req.weight,
+                req.tags,
+                &req.region,
+            )
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
@@ -1259,6 +1534,7 @@ impl proto::master_service_server::MasterService for MasterAdminService {
                 pending_bytes: w.pending_bytes,
                 write_rate_per_sec: w.write_rate_per_sec,
                 write_bytes_per_sec: w.write_bytes_per_sec,
+                region: w.region.clone(),
             })
             .collect();
 

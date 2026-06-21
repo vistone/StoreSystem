@@ -26,3 +26,10 @@ master:
   heartbeat_timeout_secs: 30
   # 清理宕机 Worker 的间隔（秒）
   cleanup_interval_secs: 60
+  # ---------- 统一存储配置（Master 下发给所有 Worker） ----------
+  kv_name: "kv"
+  kv_ext: ".db"
+  meta_name: "meta"
+  meta_ext: ".db"
+  cache_size: 10000
+  flush_interval_ms: 5

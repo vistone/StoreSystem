@@ -96,6 +96,30 @@ pub struct MasterConfig {
     /// 清理宕机 Worker 的间隔（秒）
     #[serde(default = "default_cleanup_interval")]
     pub cleanup_interval_secs: u64,
+
+    /// KV 数据库文件名（不含扩展名），统一下发给 Worker
+    #[serde(default = "default_kv_name")]
+    pub kv_name: String,
+
+    /// KV 数据库文件扩展名
+    #[serde(default = "default_kv_ext")]
+    pub kv_ext: String,
+
+    /// Meta 数据库文件名（不含扩展名）
+    #[serde(default = "default_meta_name")]
+    pub meta_name: String,
+
+    /// Meta 数据库文件扩展名
+    #[serde(default = "default_meta_ext")]
+    pub meta_ext: String,
+
+    /// 缓存大小，统一下发给 Worker
+    #[serde(default = "default_cache_size")]
+    pub cache_size: usize,
+
+    /// 刷盘间隔（毫秒），统一下发给 Worker
+    #[serde(default = "default_flush_interval")]
+    pub flush_interval_ms: u64,
 }
 
 fn default_master_listen() -> String {
@@ -121,6 +145,12 @@ impl Default for MasterConfig {
             meta_path: default_master_meta_path(),
             heartbeat_timeout_secs: default_heartbeat_timeout(),
             cleanup_interval_secs: default_cleanup_interval(),
+            kv_name: default_kv_name(),
+            kv_ext: default_kv_ext(),
+            meta_name: default_meta_name(),
+            meta_ext: default_meta_ext(),
+            cache_size: default_cache_size(),
+            flush_interval_ms: default_flush_interval(),
         }
     }
 }
@@ -179,6 +209,10 @@ pub struct WorkerConfig {
     #[serde(default = "default_weight")]
     pub weight: i32,
 
+    /// Worker 负责的 quadkey 区域 (0/1/2/3)
+    #[serde(default = "default_region")]
+    pub region: String,
+
     /// Master WebSocket 地址（用于日志推送）
     #[serde(default = "default_master_ws_addr")]
     pub master_ws_addr: String,
@@ -232,6 +266,10 @@ fn default_weight() -> i32 {
     1
 }
 
+fn default_region() -> String {
+    "0".to_string()
+}
+
 fn default_master_ws_addr() -> String {
     "127.0.0.1:50053".to_string()
 }
@@ -251,6 +289,7 @@ impl Default for WorkerConfig {
             flush_interval_ms: default_flush_interval(),
             heartbeat_interval_secs: default_heartbeat_interval(),
             weight: default_weight(),
+            region: default_region(),
             master_ws_addr: default_master_ws_addr(),
         }
     }
