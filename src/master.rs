@@ -44,6 +44,29 @@ pub struct WorkerInfo {
     pub write_bytes_per_sec: f64,
 }
 
+/// Worker 心跳数据载体（替代 19 个散列参数）
+#[derive(Debug, Default, Clone)]
+pub struct HeartbeatPayload {
+    pub storage_used_bytes: u64,
+    pub storage_capacity_bytes: u64,
+    pub active_connections: u32,
+    pub storage_usage_ratio: f64,
+    pub disk_health: String,
+    pub memory_used_bytes: u64,
+    pub memory_total_bytes: u64,
+    pub memory_usage_ratio: f64,
+    pub cpu_usage_ratio: f64,
+    pub cpu_cores: u32,
+    pub total_put_count: u64,
+    pub total_put_bytes: u64,
+    pub flushed_count: u64,
+    pub flushed_bytes: u64,
+    pub pending_count: u64,
+    pub pending_bytes: u64,
+    pub write_rate_per_sec: f64,
+    pub write_bytes_per_sec: f64,
+}
+
 /// Master 节点配置
 #[derive(Debug, Clone)]
 pub struct MasterConfig {
@@ -219,52 +242,28 @@ impl MasterNode {
     }
 
     /// 处理 Worker 心跳（同时更新内存缓存和 SQLite 持久化）
-    #[allow(clippy::too_many_arguments)]
-    pub async fn heartbeat(
-        &self,
-        worker_id: &str,
-        storage_used: u64,
-        storage_capacity: u64,
-        active_conns: u32,
-        // ---- 健康监控参数 ----
-        storage_usage_ratio: f64,
-        disk_health: &str,
-        memory_used: u64,
-        memory_total: u64,
-        memory_usage_ratio: f64,
-        cpu_usage_ratio: f64,
-        cpu_cores: u32,
-        // ---- 写入统计参数 ----
-        total_put_count: u64,
-        total_put_bytes: u64,
-        flushed_count: u64,
-        flushed_bytes: u64,
-        pending_count: u64,
-        pending_bytes: u64,
-        write_rate_per_sec: f64,
-        write_bytes_per_sec: f64,
-    ) -> Result<bool> {
+    pub async fn heartbeat(&self, worker_id: &str, p: HeartbeatPayload) -> Result<bool> {
         // 先更新 SQLite 持久化
         self.store.update_heartbeat(
             worker_id,
-            storage_used,
-            storage_capacity,
-            active_conns,
-            storage_usage_ratio,
-            disk_health,
-            memory_used,
-            memory_total,
-            memory_usage_ratio,
-            cpu_usage_ratio,
-            cpu_cores,
-            total_put_count,
-            total_put_bytes,
-            flushed_count,
-            flushed_bytes,
-            pending_count,
-            pending_bytes,
-            write_rate_per_sec,
-            write_bytes_per_sec,
+            p.storage_used_bytes,
+            p.storage_capacity_bytes,
+            p.active_connections,
+            p.storage_usage_ratio,
+            &p.disk_health,
+            p.memory_used_bytes,
+            p.memory_total_bytes,
+            p.memory_usage_ratio,
+            p.cpu_usage_ratio,
+            p.cpu_cores,
+            p.total_put_count,
+            p.total_put_bytes,
+            p.flushed_count,
+            p.flushed_bytes,
+            p.pending_count,
+            p.pending_bytes,
+            p.write_rate_per_sec,
+            p.write_bytes_per_sec,
         )?;
 
         // 再更新内存缓存
@@ -277,24 +276,24 @@ impl MasterNode {
         if let Some(worker) = workers.get_mut(worker_id) {
             worker.alive = true;
             worker.last_heartbeat = now;
-            worker.storage_used_bytes = storage_used;
-            worker.storage_capacity_bytes = storage_capacity;
-            worker.active_connections = active_conns;
-            worker.storage_usage_ratio = storage_usage_ratio;
-            worker.disk_health = disk_health.to_string();
-            worker.memory_used_bytes = memory_used;
-            worker.memory_total_bytes = memory_total;
-            worker.memory_usage_ratio = memory_usage_ratio;
-            worker.cpu_usage_ratio = cpu_usage_ratio;
-            worker.cpu_cores = cpu_cores;
-            worker.total_put_count = total_put_count;
-            worker.total_put_bytes = total_put_bytes;
-            worker.flushed_count = flushed_count;
-            worker.flushed_bytes = flushed_bytes;
-            worker.pending_count = pending_count;
-            worker.pending_bytes = pending_bytes;
-            worker.write_rate_per_sec = write_rate_per_sec;
-            worker.write_bytes_per_sec = write_bytes_per_sec;
+            worker.storage_used_bytes = p.storage_used_bytes;
+            worker.storage_capacity_bytes = p.storage_capacity_bytes;
+            worker.active_connections = p.active_connections;
+            worker.storage_usage_ratio = p.storage_usage_ratio;
+            worker.disk_health = p.disk_health;
+            worker.memory_used_bytes = p.memory_used_bytes;
+            worker.memory_total_bytes = p.memory_total_bytes;
+            worker.memory_usage_ratio = p.memory_usage_ratio;
+            worker.cpu_usage_ratio = p.cpu_usage_ratio;
+            worker.cpu_cores = p.cpu_cores;
+            worker.total_put_count = p.total_put_count;
+            worker.total_put_bytes = p.total_put_bytes;
+            worker.flushed_count = p.flushed_count;
+            worker.flushed_bytes = p.flushed_bytes;
+            worker.pending_count = p.pending_count;
+            worker.pending_bytes = p.pending_bytes;
+            worker.write_rate_per_sec = p.write_rate_per_sec;
+            worker.write_bytes_per_sec = p.write_bytes_per_sec;
             Ok(true)
         } else {
             Ok(false)
@@ -311,10 +310,13 @@ impl MasterNode {
             .collect()
     }
 
-    /// 根据 key 路由到对应的 Worker
+    /// 根据 key 路由到对应的 Worker（Rendezvous Hashing / HRW）
+    ///
+    /// 相比取模哈希，Rendezvous Hashing 的优势：
+    /// Worker 增减时只有 ~1/N 的 key 受影响，而取模哈希会导致几乎所有 key 重映射。
     pub async fn route(&self, key: &str) -> Result<WorkerInfo> {
         let workers = self.workers.read().await;
-        let mut alive_workers: Vec<&WorkerInfo> = workers.values().filter(|w| w.alive).collect();
+        let alive_workers: Vec<&WorkerInfo> = workers.values().filter(|w| w.alive).collect();
 
         if alive_workers.is_empty() {
             return Err(StoreError::InvalidArgument(
@@ -322,14 +324,56 @@ impl MasterNode {
             ));
         }
 
-        // 按 worker_id 排序，确保 alive_workers 顺序稳定
-        // （HashMap 迭代顺序不固定，不排序会导致同一个 key 路由到不同 worker）
-        alive_workers.sort_by(|a, b| a.worker_id.cmp(&b.worker_id));
+        // Rendezvous Hashing: 对每个 Worker 计算 hash(key + '\0' + worker_id)
+        // 选择哈希值最大的 Worker。先按 worker_id 排序保证迭代顺序确定性
+        // （防止 HashMap 随机种子导致两 worker 哈希相等时选中不同 worker）
+        let mut candidates: Vec<&WorkerInfo> = alive_workers.into_iter().collect();
+        candidates.sort_by(|a, b| a.worker_id.cmp(&b.worker_id));
+        let best = candidates
+            .iter()
+            .max_by_key(|w| {
+                let input = format!("{}\0{}", key, w.worker_id);
+                seahash::hash(input.as_bytes())
+            })
+            .unwrap();
 
-        // 使用 seahash 进行一致性哈希路由
-        let hash = seahash::hash(key.as_bytes());
-        let idx = (hash as usize) % alive_workers.len();
-        Ok(alive_workers[idx].clone())
+        Ok((*best).clone())
+    }
+
+    /// 路由到主副本 + 备副本（Rendezvous Hashing 排序取前 2）
+    ///
+    /// 返回 (primary, optional_secondary)。
+    /// secondary 用于异步副本写入，提升高可用性。
+    pub async fn route_with_replicas(
+        &self,
+        key: &str,
+    ) -> Result<(WorkerInfo, Option<WorkerInfo>)> {
+        let workers = self.workers.read().await;
+        let alive_workers: Vec<&WorkerInfo> = workers.values().filter(|w| w.alive).collect();
+
+        if alive_workers.is_empty() {
+            return Err(StoreError::InvalidArgument(
+                "没有可用的 Worker 节点".to_string(),
+            ));
+        }
+
+        let mut scored: Vec<(u64, &WorkerInfo)> = alive_workers
+            .iter()
+            .map(|w| {
+                let input = format!("{}\0{}", key, w.worker_id);
+                (seahash::hash(input.as_bytes()), *w)
+            })
+            .collect();
+        scored.sort_by(|a, b| b.0.cmp(&a.0)); // 降序：hash 最大在前
+
+        let primary = scored[0].1.clone();
+        let secondary = if scored.len() > 1 {
+            Some(scored[1].1.clone())
+        } else {
+            None
+        };
+
+        Ok((primary, secondary))
     }
 
     /// 获取 Worker 的 gRPC 客户端
@@ -427,8 +471,8 @@ impl MasterNode {
                     .await
             }
             _ => {
-                // "grpc" 或 "both" 默认使用 gRPC
-                let mut client = self.get_worker_client(&worker.address).await?;
+                // gRPC: 使用副本路由，同步写主，异步写备
+                let (primary, secondary) = self.route_with_replicas(&key).await?;
 
                 let now = Utc::now();
                 let meta = ObjectMeta {
@@ -436,10 +480,10 @@ impl MasterNode {
                     size: value.len() as u64,
                     created_at: now,
                     updated_at: now,
-                    content_type,
-                    tags,
+                    content_type: content_type.clone(),
+                    tags: tags.clone(),
                     checksum: None,
-                    storage_node: None,
+                    storage_node: Some(primary.worker_id.clone()),
                 };
 
                 let request = tonic::Request::new(proto::PutRequest {
@@ -453,10 +497,88 @@ impl MasterNode {
                         .unwrap_or_default(),
                 });
 
-                client
-                    .put(request)
-                    .await
-                    .map_err(|e| StoreError::InvalidArgument(format!("Worker 写入失败: {}", e)))?;
+                // 同步写入主副本（失败则 fallback 到备副本）
+                let put_result = {
+                    let mut client = match self.get_worker_client(&primary.address).await {
+                        Ok(c) => c,
+                        Err(_) => {
+                            // 主副本连接失败，尝试备副本
+                            if let Some(ref sec) = secondary {
+                                self.get_worker_client(&sec.address).await?
+                            } else {
+                                return Err(StoreError::InvalidArgument(
+                                    "主副本不可达且无备副本".to_string(),
+                                ));
+                            }
+                        }
+                    };
+                    client.put(request).await
+                };
+
+                match put_result {
+                    Ok(_) => {}
+                    Err(e) => {
+                        // 主副本写入失败，尝试备副本
+                        if let Some(ref sec) = secondary {
+                            let mut client = self.get_worker_client(&sec.address).await?;
+                            client
+                                .put(tonic::Request::new(proto::PutRequest {
+                                    key: meta.key.clone(),
+                                    value: value.to_vec(),
+                                    content_type: meta.content_type.clone().unwrap_or_default(),
+                                    tags: meta
+                                        .tags
+                                        .as_ref()
+                                        .map(|t| t.to_string())
+                                        .unwrap_or_default(),
+                                }))
+                                .await
+                                .map_err(|e2| {
+                                    StoreError::InvalidArgument(format!(
+                                        "副本写入失败(主+备均失败, 主: {}, 备: {})",
+                                        e, e2
+                                    ))
+                                })?;
+                        } else {
+                            return Err(StoreError::InvalidArgument(format!(
+                                "主副本写入失败且无备副本: {}",
+                                e
+                            )));
+                        }
+                    }
+                }
+
+                // 异步写入备副本（火后即忘，失败不影响主流程）
+                if let Some(sec) = secondary {
+                    let sec_addr = sec.address.clone();
+                    let sec_request = tonic::Request::new(proto::PutRequest {
+                        key: meta.key.clone(),
+                        value: value.to_vec(),
+                        content_type: meta.content_type.clone().unwrap_or_default(),
+                        tags: meta
+                            .tags
+                            .as_ref()
+                            .map(|t| t.to_string())
+                            .unwrap_or_default(),
+                    });
+                    let _max_msg = self.config.heartbeat_timeout_secs; // 复用为超时秒数
+                    tokio::spawn(async move {
+                        let endpoint = match tonic::transport::Endpoint::from_shared(
+                            format!("http://{}", sec_addr),
+                        ) {
+                            Ok(e) => e
+                                .timeout(Duration::from_secs(30))
+                                .connect_timeout(Duration::from_secs(3)),
+                            Err(_) => return,
+                        };
+                        if let Ok(mut c) =
+                            proto::worker_service_client::WorkerServiceClient::connect(endpoint)
+                                .await
+                        {
+                            let _ = c.put(sec_request).await;
+                        }
+                    });
+                }
 
                 Ok(meta)
             }
@@ -476,16 +598,39 @@ impl MasterNode {
                 client.get(key).await
             }
             _ => {
-                let mut client = self.get_worker_client(&worker.address).await?;
+                let (primary, secondary) = self.route_with_replicas(key).await?;
 
-                let request = tonic::Request::new(proto::GetRequest {
-                    key: key.to_string(),
-                });
+                // 尝试主副本
+                let result = {
+                    let mut client = self.get_worker_client(&primary.address).await?;
+                    let request = tonic::Request::new(proto::GetRequest {
+                        key: key.to_string(),
+                    });
+                    client.get(request).await
+                };
 
-                let response = client
-                    .get(request)
-                    .await
-                    .map_err(|e| StoreError::InvalidArgument(format!("Worker 读取失败: {}", e)))?;
+                let response = match result {
+                    Ok(r) => r,
+                    Err(e) => {
+                        // 主副本失败，尝试备副本
+                        if let Some(sec) = &secondary {
+                            let mut client = self.get_worker_client(&sec.address).await?;
+                            let request =
+                                tonic::Request::new(proto::GetRequest { key: key.to_string() });
+                            client.get(request).await.map_err(|_| {
+                                StoreError::InvalidArgument(format!(
+                                    "Worker 读取失败(主+备均失败): {}",
+                                    e
+                                ))
+                            })?
+                        } else {
+                            return Err(StoreError::InvalidArgument(format!(
+                                "Worker 读取失败(无备副本): {}",
+                                e
+                            )));
+                        }
+                    }
+                };
 
                 let resp = response.into_inner();
                 let meta_proto = resp
@@ -582,46 +727,97 @@ impl MasterNode {
 
     pub async fn list(&self, prefix: &str, limit: usize) -> Result<Vec<ObjectMeta>> {
         let workers = self.list_workers(true).await;
+        if workers.is_empty() {
+            return Ok(vec![]);
+        }
 
-        let mut all_metas = Vec::new();
-        let mut seen = std::collections::HashSet::new();
+        let protocol = self.protocol.clone();
+        let http_clients = self.http_clients.clone();
+        let ws_clients = self.ws_clients.clone();
 
-        for worker in &workers {
-            let metas = match self.protocol.as_str() {
-                "restful" => {
-                    let client = self.get_http_client(&worker.address);
-                    client.list(prefix, limit as u32).await.ok()
-                }
-                "ws" => {
-                    let client = self.get_ws_client(&worker.address);
-                    client.list(prefix, limit as u32).await.ok()
-                }
-                _ => {
-                    let mut client = match self.get_worker_client(&worker.address).await {
-                        Ok(c) => c,
-                        Err(_) => continue,
-                    };
+        // 并发查询所有存活 Worker
+        let tasks: Vec<_> = workers
+            .into_iter()
+            .map(|worker| {
+                let protocol = protocol.clone();
+                let prefix = prefix.to_string();
+                let http_clients = http_clients.clone();
+                let ws_clients = ws_clients.clone();
 
-                    let request = tonic::Request::new(proto::ListRequest {
-                        prefix: prefix.to_string(),
-                        limit: limit as u32,
-                    });
+                tokio::spawn(async move {
+                    match protocol.as_str() {
+                        "restful" => {
+                            let client = if let Some(c) = http_clients.get(&worker.address) {
+                                c.clone()
+                            } else {
+                                let c = crate::master_http::WorkerHttpClient::new(&worker.address);
+                                http_clients.insert(worker.address.clone(), c.clone());
+                                c
+                            };
+                            client.list(&prefix, limit as u32).await.ok()
+                        }
+                        "ws" => {
+                            let client = if let Some(c) = ws_clients.get(&worker.address) {
+                                c.clone()
+                            } else {
+                                let c = crate::master_ws::WorkerWsClient::new(&worker.address);
+                                ws_clients.insert(worker.address.clone(), c.clone());
+                                c
+                            };
+                            client.list(&prefix, limit as u32).await.ok()
+                        }
+                        _ => {
+                            // gRPC：list 操作不频繁，每次新建连接，避免跨任务共享客户端
+                            let endpoint = match tonic::transport::Endpoint::from_shared(
+                                format!("http://{}", worker.address),
+                            ) {
+                                Ok(e) => e
+                                    .timeout(Duration::from_secs(30))
+                                    .connect_timeout(Duration::from_secs(5)),
+                                Err(_) => return None,
+                            };
+                            let mut client =
+                                match proto::worker_service_client::WorkerServiceClient::connect(
+                                    endpoint,
+                                )
+                                .await
+                                {
+                                    Ok(c) => c
+                                        .max_decoding_message_size(256 * 1024 * 1024)
+                                        .max_encoding_message_size(256 * 1024 * 1024),
+                                    Err(_) => return None,
+                                };
 
-                    if let Ok(response) = client.list(request).await {
-                        let mut metas = Vec::new();
-                        for meta_proto in response.into_inner().metas {
-                            if let Ok(meta) = proto_to_object_meta(meta_proto) {
-                                metas.push(meta);
+                            let request = tonic::Request::new(proto::ListRequest {
+                                prefix: prefix.clone(),
+                                limit: limit as u32,
+                            });
+
+                            match client.list(request).await {
+                                Ok(response) => {
+                                    let mut metas = Vec::new();
+                                    for meta_proto in response.into_inner().metas {
+                                        if let Ok(meta) = proto_to_object_meta(meta_proto) {
+                                            metas.push(meta);
+                                        }
+                                    }
+                                    Some(metas)
+                                }
+                                Err(_) => None,
                             }
                         }
-                        Some(metas)
-                    } else {
-                        None
                     }
-                }
-            };
+                })
+            })
+            .collect();
 
-            if let Some(metas) = metas {
+        let results = futures::future::join_all(tasks).await;
+
+        let mut all_metas: Vec<ObjectMeta> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        for result in results {
+            if let Ok(Some(metas)) = result {
                 for meta in metas {
                     if seen.insert(meta.key.clone()) {
                         all_metas.push(meta);
@@ -969,29 +1165,29 @@ impl proto::master_service_server::MasterService for MasterAdminService {
     ) -> std::result::Result<Response<proto::HeartbeatResponse>, Status> {
         let req = request.into_inner();
 
+        let payload = HeartbeatPayload {
+            storage_used_bytes: req.storage_used_bytes,
+            storage_capacity_bytes: req.storage_capacity_bytes,
+            active_connections: req.active_connections,
+            storage_usage_ratio: req.storage_usage_ratio,
+            disk_health: req.disk_health,
+            memory_used_bytes: req.memory_used_bytes,
+            memory_total_bytes: req.memory_total_bytes,
+            memory_usage_ratio: req.memory_usage_ratio,
+            cpu_usage_ratio: req.cpu_usage_ratio,
+            cpu_cores: req.cpu_cores,
+            total_put_count: req.total_put_count,
+            total_put_bytes: req.total_put_bytes,
+            flushed_count: req.flushed_count,
+            flushed_bytes: req.flushed_bytes,
+            pending_count: req.pending_count,
+            pending_bytes: req.pending_bytes,
+            write_rate_per_sec: req.write_rate_per_sec,
+            write_bytes_per_sec: req.write_bytes_per_sec,
+        };
         let success = self
             .master
-            .heartbeat(
-                &req.worker_id,
-                req.storage_used_bytes,
-                req.storage_capacity_bytes,
-                req.active_connections,
-                req.storage_usage_ratio,
-                &req.disk_health,
-                req.memory_used_bytes,
-                req.memory_total_bytes,
-                req.memory_usage_ratio,
-                req.cpu_usage_ratio,
-                req.cpu_cores,
-                req.total_put_count,
-                req.total_put_bytes,
-                req.flushed_count,
-                req.flushed_bytes,
-                req.pending_count,
-                req.pending_bytes,
-                req.write_rate_per_sec,
-                req.write_bytes_per_sec,
-            )
+            .heartbeat(&req.worker_id, payload)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 

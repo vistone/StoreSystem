@@ -22,7 +22,7 @@ pub use config::AppConfig;
 pub use error::{Result, StoreError};
 pub use health::{check_storage_capacity, DiskHealth, HealthInfo};
 pub use logger::{LogCategory, LogEntry, LogLevel, LogQuery, LogStats, LogStore, WorkerLogger};
-pub use master::{MasterAdminService, MasterNode, MasterStoreService, WorkerInfo};
+pub use master::{HeartbeatPayload, MasterAdminService, MasterNode, MasterStoreService, WorkerInfo};
 pub use master_http::WorkerHttpClient;
 pub use master_ws::WorkerWsClient;
 pub use meta::ObjectMeta;

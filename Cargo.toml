@@ -1,6 +1,6 @@
 [package]
 name = "store_system"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 
 [[bin]]
@@ -27,6 +27,7 @@ bincode = "1.3"
 chrono = { version = "0.4", features = ["serde"] }
 # 线程安全缓存，提升读性能
 dashmap = "5.4"
+moka = { version = "0.12", features = ["sync"] }
 # 字节处理，零拷贝优化
 bytes = "1.0"
 futures = "0.3"

@@ -4,6 +4,7 @@ use crate::meta::{MetaStore, ObjectMeta};
 use bytes::Bytes;
 use chrono::Utc;
 use dashmap::DashMap;
+use moka::sync::Cache as MokaCache;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -65,14 +66,16 @@ impl WriteBuffer {
 
     /// 取出所有待刷盘操作（drain 语义）
     fn drain(&self) -> HashMap<String, PendingOp> {
-        let items: Vec<(String, PendingOp)> = self
-            .pending
-            .iter()
-            .map(|r| (r.key().clone(), r.value().clone()))
-            .collect();
-        self.pending.clear();
-        self.pending_count.store(0, Ordering::Relaxed);
-        items.into_iter().collect()
+        let keys: Vec<String> = self.pending.iter().map(|r| r.key().clone()).collect();
+        let mut result = HashMap::with_capacity(keys.len());
+        for key in keys {
+            if let Some((k, v)) = self.pending.remove(&key) {
+                result.insert(k, v);
+            }
+        }
+        self.pending_count
+            .store(self.pending.len() as u64, Ordering::Release);
+        result
     }
 
     fn pending_len(&self) -> u64 {
@@ -93,8 +96,7 @@ impl WriteBuffer {
 pub struct Store {
     kv_store: Arc<KvStore>,
     meta_store: Arc<MetaStore>,
-    cache: Arc<DashMap<String, Bytes>>, // 热点数据缓存，提升读性能
-    cache_size: usize,
+    cache: MokaCache<String, Bytes>, // LRU 热点缓存，自动淘汰
     /// 写合并缓冲区
     write_buffer: Arc<WriteBuffer>,
     /// 后台刷盘任务句柄（用于关闭时等待）
@@ -105,14 +107,15 @@ impl Store {
     pub fn open<P: AsRef<Path>>(kv_path: P, meta_path: P, cache_size: usize) -> Result<Self> {
         let kv_store = Arc::new(KvStore::open(kv_path)?);
         let meta_store = Arc::new(MetaStore::open(meta_path)?);
-        let cache = Arc::new(DashMap::with_capacity(cache_size));
+        let cache = MokaCache::builder()
+            .max_capacity(cache_size as u64)
+            .build();
         let write_buffer = Arc::new(WriteBuffer::new());
 
         Ok(Self {
             kv_store,
             meta_store,
             cache,
-            cache_size,
             write_buffer,
             flush_handle: Arc::new(tokio::sync::Mutex::new(None)),
         })
@@ -123,7 +126,6 @@ impl Store {
         let kv = self.kv_store.clone();
         let meta = self.meta_store.clone();
         let cache = self.cache.clone();
-        let cache_size = self.cache_size;
         let wb = self.write_buffer.clone();
         let interval = std::time::Duration::from_millis(interval_ms);
 
@@ -143,7 +145,7 @@ impl Store {
                 }
 
                 // 执行批量刷盘
-                if let Err(e) = flush_ops(&kv, &meta, &cache, cache_size, ops) {
+                if let Err(e) = flush_ops(&kv, &meta, &cache, 0, ops) {
                     eprintln!("[flusher] 批量刷盘失败: {}", e);
                 }
 
@@ -201,9 +203,7 @@ impl Store {
         };
 
         // 写入缓存（读路径优先命中缓存）
-        if self.cache.len() < self.cache_size {
-            self.cache.insert(key.clone(), value.clone());
-        }
+        self.cache.insert(key.clone(), value.clone());
 
         // 写入合并缓冲区（立即返回，后台批量刷盘）
         self.write_buffer.submit_put(key, value, meta.clone());
@@ -241,9 +241,7 @@ impl Store {
                 let meta = meta.clone();
                 drop(op);
                 // 回填缓存
-                if self.cache.len() < self.cache_size {
-                    self.cache.insert(key.to_string(), value.clone());
-                }
+                self.cache.insert(key.to_string(), value.clone());
                 return Ok((value, meta));
             }
         }
@@ -256,16 +254,14 @@ impl Store {
         let meta = self.meta_store.get(key)?;
 
         // 写入缓存
-        if self.cache.len() < self.cache_size {
-            self.cache.insert(key.to_string(), value.clone());
-        }
+        self.cache.insert(key.to_string(), value.clone());
 
         Ok((value, meta))
     }
 
     pub async fn delete(&self, key: &str) -> Result<()> {
         // 删缓存
-        self.cache.remove(key);
+        self.cache.invalidate(key);
         // 提交删除到缓冲区（后台批量执行）
         self.write_buffer.submit_delete(key.to_string());
         Ok(())
@@ -277,7 +273,7 @@ impl Store {
             return Ok(matches!(op.value(), PendingOp::Put { .. }));
         }
         // 查缓存
-        if self.cache.contains_key(key) {
+        if self.cache.get(key).is_some() {
             return Ok(true);
         }
         // 查磁盘
@@ -332,9 +328,7 @@ impl Store {
                 storage_node: None,
             };
             // 写缓存
-            if self.cache.len() < self.cache_size {
-                self.cache.insert(key.clone(), value.clone());
-            }
+            self.cache.insert(key.clone(), value.clone());
             // 写缓冲区
             self.write_buffer.submit_put(key, value, meta.clone());
             metas.push(meta);
@@ -356,44 +350,47 @@ impl Store {
 fn flush_ops(
     kv: &Arc<KvStore>,
     meta: &Arc<MetaStore>,
-    _cache: &Arc<DashMap<String, Bytes>>,
+    _cache: &MokaCache<String, Bytes>,
     _cache_size: usize,
     ops: HashMap<String, PendingOp>,
 ) -> Result<()> {
-    let mut puts_kv: Vec<(String, Bytes)> = Vec::new();
-    let mut puts_meta: Vec<ObjectMeta> = Vec::new();
-    let mut dels_kv: Vec<String> = Vec::new();
-    let mut dels_meta: Vec<String> = Vec::new();
+    if ops.is_empty() {
+        return Ok(());
+    }
+
+    let mut put_kvs: Vec<(String, Bytes)> = Vec::new();
+    let mut put_metas: Vec<ObjectMeta> = Vec::new();
+    let mut del_keys: Vec<String> = Vec::new();
 
     for (key, op) in ops {
         match op {
-            PendingOp::Put { value, meta } => {
-                puts_kv.push((key, value));
-                puts_meta.push(meta);
+            PendingOp::Put { value, meta: obj_meta } => {
+                put_kvs.push((key, value));
+                put_metas.push(obj_meta);
             }
             PendingOp::Delete => {
-                dels_kv.push(key.clone());
-                dels_meta.push(key);
+                del_keys.push(key);
             }
         }
     }
 
-    // 批量写 KV（jammdb 单事务，一次 fsync）
-    if !puts_kv.is_empty() {
-        kv.put_batch(puts_kv)?;
+    // 步骤 1：写 WAL
+    let wal_puts: Vec<(String, String)> = put_metas
+        .iter()
+        .map(|m| (m.key.clone(), serde_json::to_string(m).unwrap_or_default()))
+        .collect();
+    meta.write_wal_batch(&wal_puts, &del_keys)?;
+
+    // 步骤 2：写 KV
+    if !put_kvs.is_empty() {
+        kv.put_batch(put_kvs)?;
     }
-    // 批量写元数据（SQLite 单事务，一次 commit）
-    if !puts_meta.is_empty() {
-        meta.put_batch_txn(&puts_meta)?;
+    if !del_keys.is_empty() {
+        let _ = kv.delete_batch(del_keys.clone());
     }
-    // 批量删除 KV
-    if !dels_kv.is_empty() {
-        kv.delete_batch(dels_kv)?;
-    }
-    // 批量删除元数据
-    if !dels_meta.is_empty() {
-        meta.delete_batch_txn(&dels_meta)?;
-    }
+
+    // 步骤 3：写 Meta + 原子清除 WAL
+    meta.commit_meta_clear_wal(&put_metas, &del_keys)?;
 
     Ok(())
 }

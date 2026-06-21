@@ -388,6 +388,10 @@ impl WorkerNode {
 
         let kv_store = Arc::new(KvStore::open(&config.kv_path)?);
         let meta_store = Arc::new(MetaStore::open(&config.meta_path)?);
+
+        // === 崩溃恢复：检查并重放未完成的 WAL 记录 ===
+        recover_from_wal(&kv_store, &meta_store)?;
+
         let write_buffer = Arc::new(WriteBuffer::new());
 
         Ok(Self {
@@ -838,20 +842,103 @@ impl WorkerNode {
     }
 }
 
-/// 将缓冲区中的操作刷盘到 KvStore + MetaStore
-/// 返回 (成功刷盘的操作数, 成功刷盘的字节数)
+/// 崩溃恢复：读取 WAL 中未完成的记录，补写 Meta 或清理孤儿记录
+///
+/// 场景分析：
+/// - WAL 有记录 + KV 有数据：步骤 3 崩溃，Meta 未写 → 补写 Meta
+/// - WAL 有记录 + KV 无数据：步骤 1/2 崩溃，什么都没写完 → 删除 WAL 记录
+/// - WAL 有 delete 记录：KV 删除可能已完成 → 执行 Meta 删除（幂等）
+fn recover_from_wal(
+    kv: &Arc<crate::kv::KvStore>,
+    meta: &Arc<MetaStore>,
+) -> crate::error::Result<()> {
+    let wal_entries = meta.list_wal_entries()?;
+    if wal_entries.is_empty() {
+        return Ok(());
+    }
+
+    eprintln!(
+        "[recovery] 发现 {} 条未完成 WAL 记录，开始崩溃恢复...",
+        wal_entries.len()
+    );
+
+    for entry in wal_entries {
+        match entry.op_type.as_str() {
+            "put" => {
+                // 检查 KV 是否已写入
+                match kv.exists(&entry.key) {
+                    Ok(true) => {
+                        // KV 有数据，补写 Meta（步骤 3 崩溃）
+                        if let Some(ref json) = entry.meta_json {
+                            match serde_json::from_str::<crate::meta::ObjectMeta>(json) {
+                                Ok(m) => {
+                                    if let Err(e) = meta.put(&m) {
+                                        eprintln!(
+                                            "[recovery] 补写 Meta 失败 key={}: {}",
+                                            entry.key, e
+                                        );
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!(
+                                        "[recovery] WAL meta_json 解析失败 key={}: {}",
+                                        entry.key, e
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    Ok(false) => {
+                        // KV 无数据（步骤 2 未执行），WAL 孤儿记录，直接丢弃
+                        eprintln!(
+                            "[recovery] KV 无数据，丢弃 WAL 记录 key={}",
+                            entry.key
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("[recovery] 检查 KV 失败 key={}: {}", entry.key, e);
+                    }
+                }
+                // 无论如何都清除 WAL 条目
+                if let Err(e) = meta.delete_wal_entry(&entry.key) {
+                    eprintln!("[recovery] 清除 WAL 条目失败 key={}: {}", entry.key, e);
+                }
+            }
+            "delete" => {
+                // 执行幂等删除
+                let _ = kv.delete(&entry.key);
+                let _ = meta.delete(&entry.key);
+                if let Err(e) = meta.delete_wal_entry(&entry.key) {
+                    eprintln!("[recovery] 清除 WAL 条目失败 key={}: {}", entry.key, e);
+                }
+            }
+            _ => {
+                eprintln!("[recovery] 未知 op_type: {}", entry.op_type);
+                let _ = meta.delete_wal_entry(&entry.key);
+            }
+        }
+    }
+
+    eprintln!("[recovery] WAL 崩溃恢复完成");
+    Ok(())
+}
+
+/// 原子刷盘：WAL → KV → Meta（原子清除 WAL）
+/// 三步协议保证崩溃安全：
+///   1. 写 WAL（意图日志）→ 2. 写 KV → 3. 写 Meta + 清除 WAL
+/// 任意步骤崩溃后，重启时 recover_from_wal() 会根据 WAL 补全 Meta。
 fn flush_ops(
     kv: &KvStore,
     meta: &MetaStore,
     ops: HashMap<String, PendingOp>,
     stats: &WriteStats,
 ) -> (u64, u64) {
-    let mut count = 0u64;
-    let mut bytes = 0u64;
+    if ops.is_empty() {
+        return (0, 0);
+    }
 
-    // 分离 put 和 delete 操作，批量提交以减少事务开销
     let mut put_kvs: Vec<(String, Bytes)> = Vec::new();
-    let mut put_metas: Vec<ObjectMeta> = Vec::new();
+    let mut put_metas: Vec<crate::meta::ObjectMeta> = Vec::new();
     let mut del_keys: Vec<String> = Vec::new();
 
     for (key, op) in ops {
@@ -860,7 +947,6 @@ fn flush_ops(
                 value,
                 meta: obj_meta,
             } => {
-                bytes += value.len() as u64;
                 put_kvs.push((key, value));
                 put_metas.push(obj_meta);
             }
@@ -870,41 +956,45 @@ fn flush_ops(
         }
     }
 
-    // 批量写入 KV
+    // === 步骤 1：写 WAL 意图记录 ===
+    let wal_puts: Vec<(String, String)> = put_metas
+        .iter()
+        .map(|m| {
+            (
+                m.key.clone(),
+                serde_json::to_string(m).unwrap_or_default(),
+            )
+        })
+        .collect();
+    if let Err(e) = meta.write_wal_batch(&wal_puts, &del_keys) {
+        eprintln!("[flusher] WAL 写入失败，跳过本批次: {}", e);
+        return (0, 0);
+    }
+
+    // === 步骤 2：写 KV（jammdb 单事务）===
+    let total_bytes: u64 = put_kvs.iter().map(|(_, v)| v.len() as u64).sum();
     if !put_kvs.is_empty() {
-        let n = put_kvs.len();
-        match kv.put_batch(put_kvs) {
-            Ok(_) => count += n as u64,
-            Err(e) => eprintln!("[flusher] 批量 put KV 失败 {} 条: {}", n, e),
+        if let Err(e) = kv.put_batch(put_kvs) {
+            eprintln!("[flusher] KV 批量写入失败: {} (WAL 已记录，重启后可恢复)", e);
+            return (0, 0);
         }
     }
-
-    // 批量写入 Meta
-    if !put_metas.is_empty() {
-        let n = put_metas.len();
-        match meta.put_batch_txn(&put_metas) {
-            Ok(_) => {} // count 已在 KV 批量写入时统计
-            Err(e) => eprintln!("[flusher] 批量 put meta 失败 {} 条: {}", n, e),
-        }
-    }
-
-    // 批量删除
     if !del_keys.is_empty() {
-        let n = del_keys.len();
-        // KV 批量删除
         if let Err(e) = kv.delete_batch(del_keys.clone()) {
-            eprintln!("[flusher] 批量 delete KV 失败 {} 条: {}", n, e);
-        }
-        // Meta 批量删除
-        match meta.delete_batch_txn(&del_keys) {
-            Ok(_) => count += n as u64,
-            Err(e) => eprintln!("[flusher] 批量 delete meta 失败 {} 条: {}", n, e),
+            eprintln!("[flusher] KV 批量删除失败: {}", e);
+            // 继续，Meta 删除是幂等的
         }
     }
 
-    // 注意：record_flush 在 flusher 循环中调用，这里只返回统计值
-    let _ = stats; // 避免未使用警告
-    (count, bytes)
+    // === 步骤 3：写 Meta + 原子清除 WAL ===
+    let total_ops = put_metas.len() + del_keys.len();
+    if let Err(e) = meta.commit_meta_clear_wal(&put_metas, &del_keys) {
+        eprintln!("[flusher] Meta 写入失败: {} (WAL 已记录，重启后可恢复)", e);
+        return (0, 0);
+    }
+
+    let _ = stats;
+    (total_ops as u64, total_bytes)
 }
 
 /// Worker gRPC 服务实现

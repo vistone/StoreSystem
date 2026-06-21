@@ -3,6 +3,7 @@ use crate::kv::KvStore;
 use crate::meta::{MetaStore, ObjectMeta};
 use bytes::Bytes;
 use dashmap::DashMap;
+use moka::sync::Cache as MokaCache;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -147,14 +148,19 @@ impl WriteBuffer {
 
     /// 取出所有待刷盘操作（drain 语义）
     fn drain(&self) -> HashMap<String, PendingOp> {
-        let items: Vec<(String, PendingOp)> = self
-            .pending
-            .iter()
-            .map(|r| (r.key().clone(), r.value().clone()))
-            .collect();
-        self.pending.clear();
-        self.pending_count.store(0, Ordering::Relaxed);
-        items.into_iter().collect()
+        // 先收集所有 key（快照）
+        let keys: Vec<String> = self.pending.iter().map(|r| r.key().clone()).collect();
+        let mut result = HashMap::with_capacity(keys.len());
+        // 逐 key 移除：drain 期间新写入的 key 不会被错误清除
+        for key in keys {
+            if let Some((k, v)) = self.pending.remove(&key) {
+                result.insert(k, v);
+            }
+        }
+        // 重新计算实际剩余量，而不是直接置 0
+        self.pending_count
+            .store(self.pending.len() as u64, Ordering::Release);
+        result
     }
 
     fn pending_len(&self) -> u64 {
@@ -202,8 +208,8 @@ pub struct ShardManager {
     strategy: ShardStrategy,
     /// 写合并缓冲区（按分片索引）
     write_buffers: Vec<Arc<WriteBuffer>>,
-    /// 热点数据缓存（按分片索引）
-    caches: Vec<Arc<DashMap<String, Bytes>>>,
+    /// 热点数据缓存（LRU，按分片索引）
+    caches: Vec<MokaCache<String, Bytes>>,
     /// 缓存大小限制（每个分片）
     cache_size: usize,
     /// 后台刷盘任务句柄
@@ -224,12 +230,48 @@ impl ShardManager {
             shards.push(Shard::open(config)?);
         }
 
+        // 每个分片独立进行 WAL 崩溃恢复
+        for shard in &shards {
+            let wal_entries = shard.meta_store.list_wal_entries()?;
+            if !wal_entries.is_empty() {
+                eprintln!(
+                    "[recovery] 分片 {} 发现 {} 条 WAL 记录，开始恢复...",
+                    shard.config.shard_id,
+                    wal_entries.len()
+                );
+                for entry in wal_entries {
+                    match entry.op_type.as_str() {
+                        "put" => {
+                            if shard.kv_store.exists(&entry.key).unwrap_or(false) {
+                                if let Some(ref json) = entry.meta_json {
+                                    if let Ok(m) = serde_json::from_str::<ObjectMeta>(json) {
+                                        let _ = shard.meta_store.put(&m);
+                                    }
+                                }
+                            }
+                        }
+                        "delete" => {
+                            let _ = shard.kv_store.delete(&entry.key);
+                            let _ = shard.meta_store.delete(&entry.key);
+                        }
+                        _ => {}
+                    }
+                    let _ = shard.meta_store.delete_wal_entry(&entry.key);
+                }
+                eprintln!("[recovery] 分片 {} WAL 恢复完成", shard.config.shard_id);
+            }
+        }
+
         let num_shards = shards.len();
         let mut write_buffers = Vec::with_capacity(num_shards);
         let mut caches = Vec::with_capacity(num_shards);
         for _ in 0..num_shards {
             write_buffers.push(Arc::new(WriteBuffer::new()));
-            caches.push(Arc::new(DashMap::with_capacity(cache_size)));
+            caches.push(
+                MokaCache::builder()
+                    .max_capacity(cache_size as u64)
+                    .build(),
+            );
         }
 
         Ok(Self {
@@ -396,10 +438,8 @@ impl ShardManager {
             storage_node: None,
         };
 
-        // 写入缓存
-        if cache.len() < self.cache_size {
-            cache.insert(key.clone(), value.clone());
-        }
+        // 写入缓存（moka 自动 LRU 淘汰，无需手动判断容量）
+        cache.insert(key.clone(), value.clone());
 
         // 写入合并缓冲区
         wb.submit_put(key, value, meta.clone());
@@ -438,9 +478,7 @@ impl ShardManager {
                 let value = value.clone();
                 let meta = meta.clone();
                 drop(op);
-                if cache.len() < self.cache_size {
-                    cache.insert(key.to_string(), value.clone());
-                }
+                cache.insert(key.to_string(), value.clone());
                 return Ok((value, meta));
             }
         }
@@ -452,9 +490,7 @@ impl ShardManager {
             .ok_or_else(|| StoreError::KeyNotFound(key.to_string()))?;
         let meta = shard.meta_store.get(key)?;
 
-        if cache.len() < self.cache_size {
-            cache.insert(key.to_string(), value.clone());
-        }
+        cache.insert(key.to_string(), value.clone());
 
         Ok((value, meta))
     }
@@ -465,7 +501,7 @@ impl ShardManager {
         let cache = &self.caches[shard_idx];
         let wb = &self.write_buffers[shard_idx];
 
-        cache.remove(key);
+        cache.invalidate(key);
         wb.submit_delete(key.to_string());
         Ok(())
     }
@@ -480,7 +516,7 @@ impl ShardManager {
         if let Some(op) = wb.pending.get(key) {
             return Ok(matches!(op.value(), PendingOp::Put { .. }));
         }
-        if cache.contains_key(key) {
+        if cache.get(key).is_some() {
             return Ok(true);
         }
         shard.meta_store.exists(key)
@@ -551,9 +587,7 @@ impl ShardManager {
                 storage_node: None,
             };
 
-            if cache.len() < self.cache_size {
-                cache.insert(key.clone(), value.clone());
-            }
+            cache.insert(key.clone(), value.clone());
             wb.submit_put(key, value, meta.clone());
             all_metas.push(meta);
         }
@@ -582,44 +616,51 @@ impl ShardManager {
     }
 }
 
-/// 执行批量刷盘：将 pending 操作一次性写入 jammdb + SQLite
+/// 执行批量刷盘：将 pending 操作一次性写入 jammdb + SQLite（WAL 三步协议）
 fn flush_ops(
     kv: &Arc<KvStore>,
     meta: &Arc<MetaStore>,
-    _cache: &Arc<DashMap<String, Bytes>>,
+    _cache: &MokaCache<String, Bytes>,
     _cache_size: usize,
     ops: HashMap<String, PendingOp>,
 ) -> Result<()> {
-    let mut puts_kv: Vec<(String, Bytes)> = Vec::new();
-    let mut puts_meta: Vec<ObjectMeta> = Vec::new();
-    let mut dels_kv: Vec<String> = Vec::new();
-    let mut dels_meta: Vec<String> = Vec::new();
+    if ops.is_empty() {
+        return Ok(());
+    }
+
+    let mut put_kvs: Vec<(String, Bytes)> = Vec::new();
+    let mut put_metas: Vec<ObjectMeta> = Vec::new();
+    let mut del_keys: Vec<String> = Vec::new();
 
     for (key, op) in ops {
         match op {
-            PendingOp::Put { value, meta } => {
-                puts_kv.push((key, value));
-                puts_meta.push(meta);
+            PendingOp::Put { value, meta: obj_meta } => {
+                put_kvs.push((key, value));
+                put_metas.push(obj_meta);
             }
             PendingOp::Delete => {
-                dels_kv.push(key.clone());
-                dels_meta.push(key);
+                del_keys.push(key);
             }
         }
     }
 
-    if !puts_kv.is_empty() {
-        kv.put_batch(puts_kv)?;
+    // 步骤 1：写 WAL 意图记录
+    let wal_puts: Vec<(String, String)> = put_metas
+        .iter()
+        .map(|m| (m.key.clone(), serde_json::to_string(m).unwrap_or_default()))
+        .collect();
+    meta.write_wal_batch(&wal_puts, &del_keys)?;
+
+    // 步骤 2：写 KV
+    if !put_kvs.is_empty() {
+        kv.put_batch(put_kvs)?;
     }
-    if !puts_meta.is_empty() {
-        meta.put_batch_txn(&puts_meta)?;
+    if !del_keys.is_empty() {
+        let _ = kv.delete_batch(del_keys.clone());
     }
-    if !dels_kv.is_empty() {
-        kv.delete_batch(dels_kv)?;
-    }
-    if !dels_meta.is_empty() {
-        meta.delete_batch_txn(&dels_meta)?;
-    }
+
+    // 步骤 3：写 Meta + 原子清除 WAL
+    meta.commit_meta_clear_wal(&put_metas, &del_keys)?;
 
     Ok(())
 }

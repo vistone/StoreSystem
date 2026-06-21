@@ -217,9 +217,25 @@ async fn run_worker(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>
     };
 
     println!("   注册到 Master: {}/{}", master_addr_http, wc.worker_id);
-    match register_with_master(&master_addr_http, &wc.worker_id, &wc.listen_addr).await {
-        Ok(_) => println!("   ✅ 注册成功"),
-        Err(e) => eprintln!("   ⚠️  注册失败: {} (Master 可能未启动)", e),
+    // 注册到 Master（带重试，应对 Master 启动延迟）
+    let mut registered = false;
+    for retry in 0..10 {
+        match register_with_master(&master_addr_http, &wc.worker_id, &wc.listen_addr).await {
+            Ok(_) => {
+                println!("   ✅ 注册成功");
+                registered = true;
+                break;
+            }
+            Err(e) => {
+                if retry < 9 {
+                    let delay = std::time::Duration::from_millis(1000 * (retry + 1) as u64);
+                    eprintln!("   ⚠️  注册失败 (重试 {}/10): {}", retry + 1, e);
+                    tokio::time::sleep(delay).await;
+                } else {
+                    eprintln!("   ❌ 注册最终失败: {}", e);
+                }
+            }
+        }
     }
 
     // 启动心跳
@@ -389,21 +405,17 @@ async fn send_heartbeat(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use store_system::grpc::proto::master_service_client::MasterServiceClient;
     use store_system::health::HealthInfo;
+    use store_system::HeartbeatPayload;
 
-    // 采集系统健康信息
-    let health = HealthInfo::collect(".");
+    // CPU 采样包含 100ms sleep，用 spawn_blocking 避免阻塞 tokio 线程
+    let health = tokio::task::spawn_blocking(|| HealthInfo::collect("."))
+        .await
+        .unwrap_or_else(|_| HealthInfo::collect("."));
 
     // 采集 Worker 写入统计快照
     let write_stats = node.write_stats_snapshot();
 
-    let endpoint = tonic::transport::Endpoint::from_shared(master_addr.to_string())?
-        .timeout(Duration::from_secs(10))
-        .connect_timeout(Duration::from_secs(5));
-
-    let mut client = MasterServiceClient::connect(endpoint).await?;
-
-    let request = tonic::Request::new(store_system::grpc::proto::HeartbeatRequest {
-        worker_id: worker_id.to_string(),
+    let payload = HeartbeatPayload {
         storage_used_bytes: health.storage_used_bytes,
         storage_capacity_bytes: health.storage_capacity_bytes,
         active_connections: 0,
@@ -422,6 +434,34 @@ async fn send_heartbeat(
         pending_bytes: write_stats.pending_bytes,
         write_rate_per_sec: write_stats.write_rate_per_sec,
         write_bytes_per_sec: write_stats.write_bytes_per_sec,
+    };
+
+    let endpoint = tonic::transport::Endpoint::from_shared(master_addr.to_string())?
+        .timeout(std::time::Duration::from_secs(10))
+        .connect_timeout(std::time::Duration::from_secs(5));
+
+    let mut client = MasterServiceClient::connect(endpoint).await?;
+
+    let request = tonic::Request::new(store_system::grpc::proto::HeartbeatRequest {
+        worker_id: worker_id.to_string(),
+        storage_used_bytes: payload.storage_used_bytes,
+        storage_capacity_bytes: payload.storage_capacity_bytes,
+        active_connections: payload.active_connections,
+        storage_usage_ratio: payload.storage_usage_ratio,
+        disk_health: payload.disk_health,
+        memory_used_bytes: payload.memory_used_bytes,
+        memory_total_bytes: payload.memory_total_bytes,
+        memory_usage_ratio: payload.memory_usage_ratio,
+        cpu_usage_ratio: payload.cpu_usage_ratio,
+        cpu_cores: payload.cpu_cores,
+        total_put_count: payload.total_put_count,
+        total_put_bytes: payload.total_put_bytes,
+        flushed_count: payload.flushed_count,
+        flushed_bytes: payload.flushed_bytes,
+        pending_count: payload.pending_count,
+        pending_bytes: payload.pending_bytes,
+        write_rate_per_sec: payload.write_rate_per_sec,
+        write_bytes_per_sec: payload.write_bytes_per_sec,
     });
 
     client.heartbeat(request).await?;

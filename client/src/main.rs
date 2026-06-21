@@ -71,7 +71,7 @@ impl Report {
 async fn wait_for_server() {
     println!("等待服务启动...");
     for i in 0..30 {
-        if reqwest::get("http://localhost:8080/objects?limit=1").await.is_ok() {
+        if reqwest::get("http://localhost:52061/objects?limit=1").await.is_ok() {
             println!("RESTful 服务已就绪");
             break;
         }
@@ -96,8 +96,9 @@ fn fmt_size(bytes: usize) -> String {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🚀 存储系统大 Value 性能测试客户端启动");
     println!("========================================");
+    // 分布式模式：gRPC 连接 Master(50051)，RESTful 连接 Worker(52061)
     println!("gRPC 服务地址: http://localhost:50051");
-    println!("RESTful 服务地址: http://localhost:8080");
+    println!("RESTful 服务地址: http://localhost:52061");
     println!();
 
     wait_for_server().await;
@@ -197,9 +198,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ============ RESTful 测试 ============
     println!("\n🌐 开始 RESTful API 性能测试...");
-    let rest = restful_client::RestfulClient::new("http://localhost:8080");
-
-    // RESTful 不同 value 大小的单次写入测试
+    let rest = restful_client::RestfulClient::new("http://localhost:52061");
     for (size, rounds) in &value_sizes {
         let label = format!("RESTful 单次写入 ({})", fmt_size(*size));
         println!("  ▶ 测试 {} ({}轮)...", label, rounds);
@@ -265,7 +264,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn run_restful_only(mut report: Report) -> Result<(), Box<dyn std::error::Error>> {
     println!("\n🌐 仅运行 RESTful API 性能测试...");
-    let rest = restful_client::RestfulClient::new("http://localhost:8080");
+    let rest = restful_client::RestfulClient::new("http://localhost:52061");
 
     let value_sizes: Vec<(usize, usize)> = vec![
         (1024, 20),
