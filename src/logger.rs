@@ -759,6 +759,7 @@ impl WorkerLogger {
                         match msg {
                             Ok(_) => {} // acknowledgements discarded
                             Err(e) => {
+                                // WorkerLogger 自身的连接状态日志，此时可能尚未连接 Master，无法通过日志系统输出
                                 eprintln!("[WorkerLogger] WS 读取错误: {}", e);
                                 break;
                             }
@@ -772,9 +773,11 @@ impl WorkerLogger {
                         *guard = None;
                     }
 
+                    // WorkerLogger 自身的连接状态日志，此时可能尚未连接 Master，无法通过日志系统输出
                     eprintln!("[WorkerLogger] WS 连接断开，5 秒后重连…");
                 }
                 Err(e) => {
+                    // WorkerLogger 自身的连接状态日志，此时可能尚未连接 Master，无法通过日志系统输出
                     eprintln!("[WorkerLogger] WS 连接失败: {} (5 秒后重试)", e);
                 }
             }

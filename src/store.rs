@@ -92,6 +92,7 @@ impl WriteBuffer {
     }
 }
 
+/// 核心存储层：整合 KV + Meta + LRU 缓存 + 写合并缓冲区
 #[derive(Debug, Clone)]
 pub struct Store {
     kv_store: Arc<KvStore>,
@@ -104,6 +105,7 @@ pub struct Store {
 }
 
 impl Store {
+    /// 打开或创建存储，初始化 KV/Meta/Cache/WriteBuffer
     pub fn open<P: AsRef<Path>>(kv_path: P, meta_path: P, cache_size: usize) -> Result<Self> {
         let kv_store = Arc::new(KvStore::open(kv_path)?);
         let meta_store = Arc::new(MetaStore::open(meta_path)?);
@@ -122,7 +124,7 @@ impl Store {
     }
 
     /// 启动后台批量刷盘任务
-    pub fn start_flusher(&self, interval_ms: u64, _threshold: usize) {
+    pub fn start_flusher(&self, interval_ms: u64) {
         let kv = self.kv_store.clone();
         let meta = self.meta_store.clone();
         let cache = self.cache.clone();
@@ -182,6 +184,7 @@ impl Store {
         Ok(())
     }
 
+    /// 写入对象（写缓存 + 提交到写缓冲区，后台批量刷盘）
     pub async fn put(
         &self,
         key: String,
@@ -211,54 +214,56 @@ impl Store {
         Ok(meta)
     }
 
+    /// 读取对象（缓存 → pending → 磁盘，自动回填缓存）
     pub async fn get(&self, key: &str) -> Result<(Bytes, ObjectMeta)> {
-        // 先查缓存（缓存包含已提交但未刷盘的数据）
+        // 先查缓存（DashMap/Moka 操作是轻量级的，可以留在 async 上下文）
         if let Some(cached) = self.cache.get(key) {
-            // 尝试从元数据存储获取（可能还没刷盘）
             match self.meta_store.get(key) {
                 Ok(meta) => return Ok((cached.clone(), meta)),
                 Err(_) => {
-                    // 元数据可能还在 pending 中，从 write_buffer 构造
                     if let Some(op) = self.write_buffer.pending.get(key) {
                         if let PendingOp::Put { meta, .. } = op.value() {
                             return Ok((cached.clone(), meta.clone()));
                         }
                     }
-                    // pending 可能刚被 drain，等待刷盘完成再试
-                    // 等待后台刷盘完成
                     self.flush().await?;
-                    // 再查一次元数据
                     let meta = self.meta_store.get(key)?;
                     return Ok((cached.clone(), meta));
                 }
             }
         }
 
-        // 缓存未命中，查 pending（未刷盘的 put）
+        // 查 pending
         if let Some(op) = self.write_buffer.pending.get(key) {
             if let PendingOp::Put { value, meta } = op.value() {
                 let value = value.clone();
                 let meta = meta.clone();
                 drop(op);
-                // 回填缓存
                 self.cache.insert(key.to_string(), value.clone());
                 return Ok((value, meta));
             }
         }
 
-        // 查磁盘
-        let value = self
-            .kv_store
-            .get(key)?
-            .ok_or_else(|| StoreError::KeyNotFound(key.to_string()))?;
-        let meta = self.meta_store.get(key)?;
+        // 查磁盘（用 spawn_blocking 包装同步 I/O）
+        let kv_store = self.kv_store.clone();
+        let meta_store = self.meta_store.clone();
+        let key_owned = key.to_string();
+        let (value, meta) = tokio::task::spawn_blocking(move || {
+            let value = kv_store
+                .get(&key_owned)?
+                .ok_or_else(|| StoreError::KeyNotFound(key_owned.clone()))?;
+            let meta = meta_store.get(&key_owned)?;
+            Ok::<(Bytes, ObjectMeta), StoreError>((value, meta))
+        })
+        .await
+        .map_err(|e| StoreError::InvalidArgument(format!("spawn_blocking 失败: {}", e)))??;
 
-        // 写入缓存
         self.cache.insert(key.to_string(), value.clone());
 
         Ok((value, meta))
     }
 
+    /// 删除对象（清除缓存 + 提交删除到写缓冲区）
     pub async fn delete(&self, key: &str) -> Result<()> {
         // 删缓存
         self.cache.invalidate(key);
@@ -267,6 +272,7 @@ impl Store {
         Ok(())
     }
 
+    /// 检查对象是否存在（pending → 缓存 → 磁盘）
     pub async fn exists(&self, key: &str) -> Result<bool> {
         // 先查 pending：如果是 Delete 则不存在，如果是 Put 则存在
         if let Some(op) = self.write_buffer.pending.get(key) {
@@ -280,6 +286,7 @@ impl Store {
         self.meta_store.exists(key)
     }
 
+    /// 按前缀列出对象（磁盘 + pending 合并）
     pub async fn list(&self, prefix: &str, limit: usize) -> Result<Vec<ObjectMeta>> {
         // 先从磁盘获取基础列表
         let mut metas = self.meta_store.list(prefix, limit)?;
@@ -309,6 +316,7 @@ impl Store {
         Ok(metas)
     }
 
+    /// 批量写入对象
     pub async fn put_batch(
         &self,
         items: Vec<(String, Bytes, Option<String>, Option<serde_json::Value>)>,
@@ -337,10 +345,12 @@ impl Store {
         Ok(metas)
     }
 
+    /// 获取 KvStore 引用
     pub fn kv_store(&self) -> Arc<KvStore> {
         self.kv_store.clone()
     }
 
+    /// 获取 MetaStore 引用
     pub fn meta_store(&self) -> Arc<MetaStore> {
         self.meta_store.clone()
     }

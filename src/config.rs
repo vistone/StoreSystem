@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+use crate::error::{Result, StoreError};
+
 /// 全局配置：从 YAML 文件加载所有可配置项
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -399,39 +401,15 @@ impl Default for ShardConfig {
 // ============================================================
 
 impl AppConfig {
-    /// 从 YAML 文件加载配置
-    ///
-    /// # 参数
-    /// - `path`: YAML 配置文件路径
-    ///
-    /// # 返回值
-    /// 如果文件不存在或解析失败，返回默认配置
-    pub fn from_file(path: impl AsRef<Path>) -> Self {
+    /// 从 YAML 文件加载配置（失败时返回错误而不是静默回退默认值）
+    pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        if !path.exists() {
-            eprintln!(
-                "[Config] 配置文件 '{}' 不存在，使用默认配置",
-                path.display()
-            );
-            return Self::default();
-        }
-
-        match std::fs::read_to_string(path) {
-            Ok(content) => match serde_yaml::from_str(&content) {
-                Ok(config) => {
-                    println!("[Config] 已加载配置文件: {}", path.display());
-                    config
-                }
-                Err(e) => {
-                    eprintln!("[Config] 配置文件解析失败: {}，使用默认配置", e);
-                    Self::default()
-                }
-            },
-            Err(e) => {
-                eprintln!("[Config] 读取配置文件失败: {}，使用默认配置", e);
-                Self::default()
-            }
-        }
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| StoreError::InvalidArgument(format!("读取配置文件 '{}' 失败: {}", path.display(), e)))?;
+        let config = serde_yaml::from_str(&content)
+            .map_err(|e| StoreError::InvalidArgument(format!("解析配置文件 '{}' 失败: {}", path.display(), e)))?;
+        println!("[Config] 已加载配置文件: {}", path.display());
+        Ok(config)
     }
 }
 

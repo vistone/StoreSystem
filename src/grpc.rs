@@ -2,18 +2,21 @@ use crate::store::Store;
 use bytes::Bytes;
 use tonic::{Request, Response, Status};
 
+/// Protobuf 生成代码
 pub mod proto {
     tonic::include_proto!("store");
 }
 
 use proto::*;
 
+/// gRPC StoreService 实现
 #[derive(Debug, Clone)]
 pub struct GrpcStoreService {
     store: Store,
 }
 
 impl GrpcStoreService {
+    /// 创建 GrpcStoreService
     pub fn new(store: Store) -> Self {
         Self { store }
     }

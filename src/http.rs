@@ -11,18 +11,21 @@ struct CustomReject(StatusCode, String);
 
 impl warp::reject::Reject for CustomReject {}
 
+/// PUT 请求查询参数
 #[derive(Debug, Deserialize)]
 pub struct PutQuery {
     pub content_type: Option<String>,
     pub tags: Option<String>,
 }
 
+/// 列表查询参数
 #[derive(Debug, Deserialize)]
 pub struct ListQuery {
     pub prefix: Option<String>,
     pub limit: Option<u32>,
 }
 
+/// 对象元数据响应
 #[derive(Debug, Serialize)]
 pub struct ObjectMetaResponse {
     pub key: String,
@@ -33,32 +36,38 @@ pub struct ObjectMetaResponse {
     pub tags: Option<serde_json::Value>,
 }
 
+/// 写入响应
 #[derive(Debug, Serialize)]
 pub struct PutResponse {
     pub meta: ObjectMetaResponse,
 }
 
+/// 读取响应（value 为 base64 编码）
 #[derive(Debug, Serialize)]
 pub struct GetResponse {
     pub meta: ObjectMetaResponse,
     pub value: String, // base64 编码的二进制数据
 }
 
+/// 删除响应
 #[derive(Debug, Serialize)]
 pub struct DeleteResponse {
     pub success: bool,
 }
 
+/// 存在检查响应
 #[derive(Debug, Serialize)]
 pub struct ExistsResponse {
     pub exists: bool,
 }
 
+/// 列表响应
 #[derive(Debug, Serialize)]
 pub struct ListResponse {
     pub metas: Vec<ObjectMetaResponse>,
 }
 
+/// 批量写入请求中的单条
 #[derive(Debug, Deserialize)]
 pub struct BatchItem {
     pub key: String,
@@ -67,6 +76,7 @@ pub struct BatchItem {
     pub tags: Option<serde_json::Value>,
 }
 
+/// 批量写入请求体
 #[derive(Debug, Deserialize)]
 pub struct PutBatchRequest {
     pub items: Vec<BatchItem>,
@@ -216,6 +226,7 @@ fn cors() -> warp::cors::Cors {
         .build()
 }
 
+/// 启动 RESTful API 服务（warp）
 pub async fn start_server(store: Store, port: u16) {
     let store = Arc::new(store);
 

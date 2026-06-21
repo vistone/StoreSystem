@@ -97,7 +97,7 @@ pub struct MasterNode {
     /// 通讯协议: "grpc" | "restful" | "ws" | "both"
     pub protocol: String,
     /// Master 集群元数据库（SQLite 持久化）
-    pub store: MasterStore,
+    pub store: Arc<MasterStore>,
     /// Worker 信息表（内存缓存，启动时从 SQLite 加载）
     workers: Arc<RwLock<HashMap<String, WorkerInfo>>>,
     /// Worker gRPC 客户端缓存（避免频繁创建连接）
@@ -130,7 +130,7 @@ impl MasterNode {
 
     pub fn open_with_protocol(config: MasterConfig, protocol: &str) -> Result<Self> {
         // 打开 Master 集群元数据库（SQLite 持久化）
-        let store = MasterStore::open(&config.meta_path)?;
+        let store = Arc::new(MasterStore::open(&config.meta_path)?);
 
         // 从 SQLite 加载 Worker 信息到内存缓存
         let mut workers_map = HashMap::new();
@@ -194,9 +194,14 @@ impl MasterNode {
         weight: i32,
         tags: HashMap<String, String>,
     ) -> Result<()> {
-        // 先写入 SQLite 持久化
-        self.store
-            .register_worker(worker_id, address, weight, &tags)?;
+        // 先写入 SQLite 持久化（用 spawn_blocking 包装同步 I/O）
+        let store = self.store.clone();
+        let wid = worker_id.to_string();
+        let addr = address.to_string();
+        let tags_clone = tags.clone();
+        tokio::task::spawn_blocking(move || store.register_worker(&wid, &addr, weight, &tags_clone))
+            .await
+            .map_err(|e| StoreError::InvalidArgument(format!("spawn_blocking 失败: {}", e)))??;
 
         // 再更新内存缓存
         let mut workers = self.workers.write().await;
@@ -243,28 +248,35 @@ impl MasterNode {
 
     /// 处理 Worker 心跳（同时更新内存缓存和 SQLite 持久化）
     pub async fn heartbeat(&self, worker_id: &str, p: HeartbeatPayload) -> Result<bool> {
-        // 先更新 SQLite 持久化
-        self.store.update_heartbeat(
-            worker_id,
-            p.storage_used_bytes,
-            p.storage_capacity_bytes,
-            p.active_connections,
-            p.storage_usage_ratio,
-            &p.disk_health,
-            p.memory_used_bytes,
-            p.memory_total_bytes,
-            p.memory_usage_ratio,
-            p.cpu_usage_ratio,
-            p.cpu_cores,
-            p.total_put_count,
-            p.total_put_bytes,
-            p.flushed_count,
-            p.flushed_bytes,
-            p.pending_count,
-            p.pending_bytes,
-            p.write_rate_per_sec,
-            p.write_bytes_per_sec,
-        )?;
+        // 先更新 SQLite 持久化（用 spawn_blocking 包装同步 I/O）
+        let store = self.store.clone();
+        let wid = worker_id.to_string();
+        let p_sqlite = p.clone();
+        let _alive = tokio::task::spawn_blocking(move || {
+            store.update_heartbeat(
+                &wid,
+                p_sqlite.storage_used_bytes,
+                p_sqlite.storage_capacity_bytes,
+                p_sqlite.active_connections,
+                p_sqlite.storage_usage_ratio,
+                &p_sqlite.disk_health,
+                p_sqlite.memory_used_bytes,
+                p_sqlite.memory_total_bytes,
+                p_sqlite.memory_usage_ratio,
+                p_sqlite.cpu_usage_ratio,
+                p_sqlite.cpu_cores,
+                p_sqlite.total_put_count,
+                p_sqlite.total_put_bytes,
+                p_sqlite.flushed_count,
+                p_sqlite.flushed_bytes,
+                p_sqlite.pending_count,
+                p_sqlite.pending_bytes,
+                p_sqlite.write_rate_per_sec,
+                p_sqlite.write_bytes_per_sec,
+            )
+        })
+        .await
+        .map_err(|e| StoreError::InvalidArgument(format!("spawn_blocking 失败: {}", e)))??;
 
         // 再更新内存缓存
         let mut workers = self.workers.write().await;
@@ -335,7 +347,7 @@ impl MasterNode {
                 let input = format!("{}\0{}", key, w.worker_id);
                 seahash::hash(input.as_bytes())
             })
-            .unwrap();
+            .expect("candidates 非空已在上方保证");
 
         Ok((*best).clone())
     }

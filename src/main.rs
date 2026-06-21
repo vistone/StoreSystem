@@ -31,7 +31,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         i += 1;
     }
 
-    let config = AppConfig::from_file(&config_path);
+    let config = AppConfig::from_file(&config_path).unwrap_or_else(|e| {
+        eprintln!("[Config] 配置加载失败: {}，使用默认配置", e);
+        AppConfig::default()
+    });
 
     // 确定运行模式：命令行 > 配置文件
     let mode = mode.unwrap_or_else(|| config.mode.clone());
@@ -323,7 +326,7 @@ async fn run_standalone(config: &AppConfig) -> Result<(), Box<dyn std::error::Er
     }
 
     let store = Store::open(&sc.kv_path, &sc.meta_path, sc.cache_size)?;
-    store.start_flusher(sc.flush_interval_ms, 1000);
+    store.start_flusher(sc.flush_interval_ms);
     println!("✅ Store (单库) 初始化完成！");
 
     // 启动 RESTful HTTP 服务

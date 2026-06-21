@@ -101,7 +101,6 @@ impl HealthInfo {
         #[cfg(target_os = "linux")]
         {
             use std::ffi::CString;
-            use std::mem::MaybeUninit;
 
             let path = data_dir.as_ref();
             // 确保目录存在
@@ -113,7 +112,7 @@ impl HealthInfo {
             };
 
             unsafe {
-                let mut stat: libc::statvfs = MaybeUninit::zeroed().assume_init();
+                let mut stat: libc::statvfs = std::mem::zeroed();
                 if libc::statvfs(c_path.as_ptr(), &mut stat) == 0 {
                     let total = stat.f_blocks * stat.f_frsize;
                     let available = stat.f_bavail * stat.f_frsize;
@@ -173,6 +172,7 @@ impl HealthInfo {
             if cpu_times1.is_empty() {
                 return 0.0;
             }
+            // 注意：collect() 被 spawn_blocking 包装调用，sleep 不会阻塞 tokio 线程
             std::thread::sleep(std::time::Duration::from_millis(100));
             let cpu_times2 = Self::read_cpu_times();
             if cpu_times2.is_empty() {

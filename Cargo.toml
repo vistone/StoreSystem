@@ -1,6 +1,6 @@
 [package]
 name = "store_system"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 
 [[bin]]
@@ -14,10 +14,14 @@ equivalent = "=1.0.1"
 hashbrown = "=0.14.3"
 
 # SQLite 绑定，自带编译好的 SQLite 避免系统依赖
-rusqlite = { version = "0.29.0", features = ["bundled", "chrono", "serde_json"] }
+rusqlite = { version = "0.29.0", features = [
+    "bundled",
+    "chrono",
+    "serde_json",
+] }
 # 异步 runtime，锁定兼容 Rust 1.84 版本
 tokio = { version = "=1.36.0", features = ["full"] }
-tokio-stream = "=0.1.14" # 兼容 tokio 1.36
+tokio-stream = "=0.1.14"                             # 兼容 tokio 1.36
 # 错误处理，锁定兼容 Rust 1.84 版本
 thiserror = "=1.0.58"
 # 序列化

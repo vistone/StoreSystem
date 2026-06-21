@@ -83,7 +83,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !read_failures.is_empty() {
         println!("  丢失样本 (前 5):");
         for (k, e) in read_failures.iter().take(5) {
-            println!("    {} → {}", k, &e[..80.min(e.len())]);
+            let trunc: String = e.chars().take(80).collect();
+            println!("    {} → {}", k, trunc);
         }
     }
 
@@ -138,13 +139,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 阶段 4: 重启 Worker-2
     // ============================================================
     println!("\n━ 阶段 4: 重启 Worker-2 ━━");
-    let _ = std::process::Command::new(
-        "/home/stone/StoreSystem/target/release/store_system",
-    )
-    .args(["--config", "worker2.yaml"])
-    .stdout(std::process::Stdio::null())
-    .stderr(std::process::Stdio::null())
-    .spawn();
+    let _ = std::process::Command::new("/home/stone/StoreSystem/target/release/store_system")
+        .args(["--config", "worker2.yaml"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
     tokio::time::sleep(Duration::from_secs(5)).await;
 
     // ============================================================
@@ -183,11 +182,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let w2_recovery = w2_log.contains("[recovery]");
     println!(
         "  Worker-1 WAL 恢复: {}",
-        if w1_recovery { "有恢复操作" } else { "正常" }
+        if w1_recovery {
+            "有恢复操作"
+        } else {
+            "正常"
+        }
     );
     println!(
         "  Worker-2 WAL 恢复: {}",
-        if w2_recovery { "有恢复操作" } else { "正常" }
+        if w2_recovery {
+            "有恢复操作"
+        } else {
+            "正常"
+        }
     );
 
     // ============================================================
@@ -227,7 +234,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("╠══════════════════════════════════════════════════╣");
     println!(
         "║  综合结论:            {:>28} ║",
-        if all_pass { "✅ 全部通过" } else { "⚠️  部分通过" }
+        if all_pass {
+            "✅ 全部通过"
+        } else {
+            "⚠️  部分通过"
+        }
     );
     println!("╚══════════════════════════════════════════════════╝");
 

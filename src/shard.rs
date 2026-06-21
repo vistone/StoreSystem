@@ -78,6 +78,7 @@ pub struct Shard {
 }
 
 impl Shard {
+    /// 打开分片：创建/打开 KV 和 Meta 数据库
     pub fn open(config: ShardConfig) -> Result<Self> {
         // 确保数据目录存在
         std::fs::create_dir_all(&config.data_dir)?;
@@ -267,11 +268,7 @@ impl ShardManager {
         let mut caches = Vec::with_capacity(num_shards);
         for _ in 0..num_shards {
             write_buffers.push(Arc::new(WriteBuffer::new()));
-            caches.push(
-                MokaCache::builder()
-                    .max_capacity(cache_size as u64)
-                    .build(),
-            );
+            caches.push(MokaCache::builder().max_capacity(cache_size as u64).build());
         }
 
         Ok(Self {
@@ -349,7 +346,7 @@ impl ShardManager {
     }
 
     /// 启动后台批量刷盘任务
-    pub fn start_flusher(&self, interval_ms: u64, _threshold: usize) {
+    pub fn start_flusher(&self, interval_ms: u64) {
         let num_shards = self.shards.len();
         let mut handles = Vec::with_capacity(num_shards);
 
@@ -376,8 +373,19 @@ impl ShardManager {
                         continue;
                     }
 
-                    // 执行批量刷盘
-                    if let Err(e) = flush_ops(&kv, &meta, &cache, cache_size, ops) {
+                    // 将同步 I/O 移到 spawn_blocking 避免阻塞 tokio 线程
+                    let kv2 = kv.clone();
+                    let meta2 = meta.clone();
+                    let cache2 = cache.clone();
+                    if let Err(e) = tokio::task::spawn_blocking(move || {
+                        flush_ops(&kv2, &meta2, &cache2, cache_size, ops)
+                    })
+                    .await
+                    .unwrap_or(Err(
+                        crate::error::StoreError::InvalidArgument(
+                            "spawn_blocking join error".to_string(),
+                        ),
+                    )) {
                         eprintln!("[flusher-{}] 批量刷盘失败: {}", shard_idx, e);
                     }
 
@@ -634,7 +642,10 @@ fn flush_ops(
 
     for (key, op) in ops {
         match op {
-            PendingOp::Put { value, meta: obj_meta } => {
+            PendingOp::Put {
+                value,
+                meta: obj_meta,
+            } => {
                 put_kvs.push((key, value));
                 put_metas.push(obj_meta);
             }

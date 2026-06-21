@@ -71,10 +71,7 @@ pub struct WalEntry {
     pub meta_json: Option<String>,
 }
 
-// ============================================================
-// MetaStore
-// ============================================================
-
+/// SQLite 元数据存储：管理对象元数据、统计聚合、标签索引和 WAL 崩溃恢复日志
 #[derive(Debug)]
 pub struct MetaStore {
     conn: Mutex<Connection>,

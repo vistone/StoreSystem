@@ -167,7 +167,10 @@ impl WriteStats {
 
         // 计算近期写入速率（自上次快照以来的平均速率）
         let (write_rate_per_sec, write_bytes_per_sec) = {
-            let mut start = self.rate_window_start.lock().unwrap();
+            let mut start = match self.rate_window_start.lock() {
+                Ok(s) => s,
+                Err(_) => return WriteStatsSnapshot::default(),
+            };
             let elapsed = start.elapsed().as_secs_f64();
             let start_count = self.rate_window_start_count.load(Ordering::Relaxed);
             let start_bytes = self.rate_window_start_bytes.load(Ordering::Relaxed);
@@ -369,7 +372,7 @@ impl WorkerNode {
         if let Some(shard_configs) = &config.shard_configs {
             if !shard_configs.is_empty() {
                 let manager = ShardManager::open(shard_configs.clone(), config.cache_size)?;
-                manager.start_flusher(config.flush_interval_ms, 1000);
+                manager.start_flusher(config.flush_interval_ms);
                 return Ok(Self {
                     config,
                     kv_store: None,
@@ -440,7 +443,15 @@ impl WorkerNode {
                             continue;
                         }
                         let ops_count = ops.len();
-                        let (count, bytes) = flush_ops(&kv, &meta, ops, &stats);
+                        // 将同步 I/O（SQLite + jammdb）移到 spawn_blocking 避免阻塞 tokio
+                        let kv2 = kv.clone();
+                        let meta2 = meta.clone();
+                        let stats2 = stats.clone();
+                        let (count, bytes) = tokio::task::spawn_blocking(move || {
+                            flush_ops(&kv2, &meta2, ops, &stats2)
+                        })
+                        .await
+                        .unwrap_or((0, 0));
                         if count != ops_count as u64 {
                             eprintln!(
                                 "[flusher] 刷盘完成 {}/{} 条, {} 字节",
@@ -449,8 +460,6 @@ impl WorkerNode {
                         }
                         stats.record_flush(count, bytes);
                         wb.flushing.store(false, Ordering::Release);
-                        // 处理完一批后立即检查是否有新数据（不等待 notify）
-                        // 这样空闲时写入能立即落盘，连续写入时能批量处理
                         if wb.pending_len() > 0 {
                             continue;
                         }
@@ -546,6 +555,17 @@ impl WorkerNode {
         let value = self.get(key)?;
         if let Some(v) = value {
             let meta = self.get_meta(key).ok();
+            // 如果 Meta 还没落盘（flusher 的 WAL 三步协议中 KV 已完成但 Meta 未完成），
+            // 等待刷盘完成后再查一次
+            if meta.is_none() {
+                if let Some(wb) = &self.write_buffer {
+                    while wb.flushing.load(Ordering::Acquire) {
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+                }
+                let meta = self.get_meta(key).ok();
+                return Ok(Some((v, meta)));
+            }
             Ok(Some((v, meta)))
         } else if let Some(wb) = &self.write_buffer {
             // 缓冲区和磁盘都没找到：可能正在刷盘中（drain 之后、flush_ops 完成之前）
@@ -890,10 +910,7 @@ fn recover_from_wal(
                     }
                     Ok(false) => {
                         // KV 无数据（步骤 2 未执行），WAL 孤儿记录，直接丢弃
-                        eprintln!(
-                            "[recovery] KV 无数据，丢弃 WAL 记录 key={}",
-                            entry.key
-                        );
+                        eprintln!("[recovery] KV 无数据，丢弃 WAL 记录 key={}", entry.key);
                     }
                     Err(e) => {
                         eprintln!("[recovery] 检查 KV 失败 key={}: {}", entry.key, e);
@@ -959,12 +976,7 @@ fn flush_ops(
     // === 步骤 1：写 WAL 意图记录 ===
     let wal_puts: Vec<(String, String)> = put_metas
         .iter()
-        .map(|m| {
-            (
-                m.key.clone(),
-                serde_json::to_string(m).unwrap_or_default(),
-            )
-        })
+        .map(|m| (m.key.clone(), serde_json::to_string(m).unwrap_or_default()))
         .collect();
     if let Err(e) = meta.write_wal_batch(&wal_puts, &del_keys) {
         eprintln!("[flusher] WAL 写入失败，跳过本批次: {}", e);
@@ -975,7 +987,10 @@ fn flush_ops(
     let total_bytes: u64 = put_kvs.iter().map(|(_, v)| v.len() as u64).sum();
     if !put_kvs.is_empty() {
         if let Err(e) = kv.put_batch(put_kvs) {
-            eprintln!("[flusher] KV 批量写入失败: {} (WAL 已记录，重启后可恢复)", e);
+            eprintln!(
+                "[flusher] KV 批量写入失败: {} (WAL 已记录，重启后可恢复)",
+                e
+            );
             return (0, 0);
         }
     }
@@ -1058,12 +1073,15 @@ impl proto::worker_service_server::WorkerService for WorkerService {
             storage_node: None,
         };
 
-        self.node
-            .put_object(&req.key, value, meta.clone())
+        let node = self.node.clone();
+        let key = req.key;
+        let meta_for_response = meta.clone();
+        // WriteBuffer 是内存操作（DashMap），不需要 spawn_blocking
+        node.put_object(&key, value, meta)
             .map_err(|e| Status::internal(e.to_string()))?;
 
         Ok(Response::new(proto::PutResponse {
-            meta: Some(Self::convert_meta(meta)),
+            meta: Some(Self::convert_meta(meta_for_response)),
         }))
     }
 
@@ -1073,11 +1091,15 @@ impl proto::worker_service_server::WorkerService for WorkerService {
     ) -> std::result::Result<Response<proto::GetResponse>, Status> {
         let req = request.into_inner();
 
-        let (value, meta) = self
-            .node
-            .get_object(&req.key)
-            .map_err(|e| Status::internal(e.to_string()))?
-            .ok_or_else(|| Status::not_found(format!("Key not found: {}", req.key)))?;
+        let req_key = req.key;
+        let node = self.node.clone();
+        let key = req_key.clone();
+        // get_object 检查 WriteBuffer（内存操作，快）+ 磁盘（带重试）
+        let result = node
+            .get_object(&key)
+            .map_err(|e| Status::internal(e.to_string()))?;
+        let (value, meta) =
+            result.ok_or_else(|| Status::not_found(format!("Key not found: {}", req_key)))?;
 
         Ok(Response::new(proto::GetResponse {
             value: value.to_vec(),
@@ -1091,8 +1113,10 @@ impl proto::worker_service_server::WorkerService for WorkerService {
     ) -> std::result::Result<Response<proto::DeleteResponse>, Status> {
         let req = request.into_inner();
 
-        self.node
-            .delete_object(&req.key)
+        let node = self.node.clone();
+        let key = req.key;
+        // delete_object 是 WriteBuffer 内存操作，不需要 spawn_blocking
+        node.delete_object(&key)
             .map_err(|e| Status::internal(e.to_string()))?;
 
         Ok(Response::new(proto::DeleteResponse { success: true }))
@@ -1104,9 +1128,11 @@ impl proto::worker_service_server::WorkerService for WorkerService {
     ) -> std::result::Result<Response<proto::ExistsResponse>, Status> {
         let req = request.into_inner();
 
-        let exists = self
-            .node
-            .meta_exists(&req.key)
+        let node = self.node.clone();
+        let key = req.key;
+        let exists = tokio::task::spawn_blocking(move || node.meta_exists(&key))
+            .await
+            .map_err(|e| Status::internal(format!("task join error: {}", e)))?
             .map_err(|e| Status::internal(e.to_string()))?;
 
         Ok(Response::new(proto::ExistsResponse { exists }))
@@ -1118,9 +1144,12 @@ impl proto::worker_service_server::WorkerService for WorkerService {
     ) -> std::result::Result<Response<proto::ListResponse>, Status> {
         let req = request.into_inner();
 
-        let metas = self
-            .node
-            .list_meta(&req.prefix, req.limit as usize)
+        let node = self.node.clone();
+        let prefix = req.prefix;
+        let limit = req.limit as usize;
+        let metas = tokio::task::spawn_blocking(move || node.list_meta(&prefix, limit))
+            .await
+            .map_err(|e| Status::internal(format!("task join error: {}", e)))?
             .map_err(|e| Status::internal(e.to_string()))?;
 
         let proto_metas = metas.into_iter().map(Self::convert_meta).collect();
@@ -1165,8 +1194,10 @@ impl proto::worker_service_server::WorkerService for WorkerService {
             items.push((item.key, value, meta));
         }
 
-        self.node
-            .put_objects_batch(items)
+        let node = self.node.clone();
+        tokio::task::spawn_blocking(move || node.put_objects_batch(items))
+            .await
+            .map_err(|e| Status::internal(format!("task join error: {}", e)))?
             .map_err(|e| Status::internal(e.to_string()))?;
 
         let proto_metas = metas.into_iter().map(Self::convert_meta).collect();
