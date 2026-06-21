@@ -327,5 +327,5 @@ pub async fn start_worker_http_server(node: Arc<WorkerNode>, port: u16) {
         "🌐 Worker RESTful API server running on http://0.0.0.0:{}",
         port
     );
-    warp::serve(routes).run(([0, 0, 0, 0], port)).await;
+    warp::serve(routes).bind(([0, 0, 0, 0], port)).await;
 }

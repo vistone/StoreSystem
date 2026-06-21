@@ -301,5 +301,5 @@ pub async fn start_server(store: Store, port: u16) {
         });
 
     println!("🌐 RESTful API server running on http://0.0.0.0:{}", port);
-    warp::serve(routes).run(([0, 0, 0, 0], port)).await;
+    warp::serve(routes).bind(([0, 0, 0, 0], port)).await;
 }

@@ -64,9 +64,9 @@ pub struct ClusterOverview {
     pub total_memory_bytes: u64,
     pub used_memory_bytes: u64,
     pub avg_cpu_usage: f64,
-    pub total_logs_today: usize,
-    pub unread_logs: usize,
-    pub error_logs_today: usize,
+    pub total_logs_today: i64,
+    pub unread_logs: i64,
+    pub error_logs_today: i64,
 }
 
 /// Worker 节点信息（前端展示用）
@@ -146,10 +146,10 @@ pub struct LogEntryResponse {
 /// 日志统计响应
 #[derive(Debug, Serialize)]
 pub struct LogStatsResponse {
-    pub total: usize,
-    pub unread: usize,
-    pub errors: usize,
-    pub today: usize,
+    pub total: i64,
+    pub unread: i64,
+    pub errors: i64,
+    pub today: i64,
     pub by_worker: Vec<(String, i64)>,
 }
 
@@ -294,19 +294,7 @@ pub async fn start_admin_api(ctx: AdminContext, port: u16) {
         .and(warp::any().map(move || health_ctx.clone()))
         .and_then(handle_health_check);
 
-    // WebSocket 端点：实时日志流
-    // 注意：warp 0.3 中 ws() 返回 Ws2，需要用 .map() + .on_upgrade() 而不是 .and_then()
-    let ws_ctx = ctx.clone();
-    let ws_route = warp::path!("api" / "v1" / "ws" / "logs")
-        .and(warp::ws())
-        .map(move |ws: warp::ws::Ws| {
-            let ctx = ws_ctx.clone();
-            ws.on_upgrade(move |websocket| handle_log_ws_connection(websocket, ctx))
-        });
-
-    // WebSocket 路由必须放在 cors 之前，因为 ws 升级需要特殊处理
-    let routes = ws_route
-        .or(overview_route)
+    let routes = overview_route
         .or(workers_route)
         .or(worker_detail_route)
         .or(logs_route)
@@ -320,7 +308,7 @@ pub async fn start_admin_api(ctx: AdminContext, port: u16) {
         .recover(handle_rejection);
 
     println!("📊 Master Admin API running on http://0.0.0.0:{}", port);
-    warp::serve(routes).run(([0, 0, 0, 0], port)).await;
+    warp::serve(routes).bind(([0, 0, 0, 0], port)).await;
 }
 
 // ============================================================
@@ -554,78 +542,4 @@ async fn handle_health_check(ctx: Arc<AdminContext>) -> Result<impl Reply, Rejec
     });
 
     Ok(warp::reply::json(&ApiResponse::ok(health)))
-}
-
-async fn handle_log_ws_connection(ws: warp::ws::WebSocket, ctx: Arc<AdminContext>) {
-    use futures_util::{SinkExt, StreamExt};
-    let (mut tx, mut rx) = ws.split();
-
-    // 定期推送最新日志
-    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(2));
-    let mut last_id: i64 = 0;
-
-    loop {
-        tokio::select! {
-            _ = interval.tick() => {
-                // 查询新日志
-                let query = LogQuery { limit: 50, ..Default::default() };
-                if let Ok(entries) = ctx.log_store.query_logs(&query) {
-                    let new_entries: Vec<LogEntryResponse> = entries.into_iter()
-                        .filter(|e| e.id > last_id)
-                        .map(|e| LogEntryResponse {
-                            id: e.id,
-                            worker_id: e.worker_id,
-                            level: e.level.to_string(),
-                            category: e.category.to_string(),
-                            message: e.message,
-                            detail_json: e.detail_json,
-                            timestamp: e.timestamp.to_rfc3339(),
-                            acknowledged: e.acknowledged,
-                        })
-                        .collect();
-
-                    if let Some(max_id) = new_entries.iter().map(|e| e.id).max() {
-                        last_id = max_id;
-                    }
-
-                    if !new_entries.is_empty() {
-                        let msg = serde_json::json!({
-                            "type": "logs",
-                            "data": new_entries,
-                        });
-                        if tx.send(warp::ws::Message::text(msg.to_string())).await.is_err() {
-                            break;
-                        }
-                    }
-                }
-
-                // 同时推送集群概览
-                let workers = ctx.master.list_workers(false).await;
-                let overview = serde_json::json!({
-                    "type": "overview",
-                    "data": {
-                        "total_workers": workers.len(),
-                        "alive_workers": workers.iter().filter(|w| w.alive).count(),
-                        "workers": workers.iter().map(|w| serde_json::json!({
-                            "worker_id": w.worker_id,
-                            "alive": w.alive,
-                            "cpu_usage_ratio": w.cpu_usage_ratio,
-                            "memory_usage_ratio": w.memory_usage_ratio,
-                            "storage_usage_ratio": w.storage_usage_ratio,
-                            "disk_health": w.disk_health,
-                        })).collect::<Vec<_>>(),
-                    }
-                });
-                if tx.send(warp::ws::Message::text(overview.to_string())).await.is_err() {
-                    break;
-                }
-            }
-            Some(msg) = rx.next() => {
-                match msg {
-                    Ok(_) => {}
-                    Err(_) => break,
-                }
-            }
-        }
-    }
 }

@@ -9,7 +9,7 @@ pub enum StoreError {
     MetaError(#[from] rusqlite::Error),
 
     #[error("Serialization error: {0}")]
-    SerializationError(#[from] bincode::Error),
+    SerializationError(#[from] Box<dyn std::error::Error + Send + Sync>),
 
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),

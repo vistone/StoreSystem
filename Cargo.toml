@@ -1,6 +1,6 @@
 [package]
 name = "store_system"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 
 [[bin]]
@@ -9,57 +9,52 @@ path = "src/main.rs"
 
 [dependencies]
 
-indexmap = "=2.0.2"
-equivalent = "=1.0.1"
-hashbrown = "=0.14.3"
+# 数据结构
+indexmap = "2"
+equivalent = "1"
+hashbrown = "0.17"
 
-# SQLite 绑定，自带编译好的 SQLite 避免系统依赖
-rusqlite = { version = "0.29.0", features = [
-    "bundled",
-    "chrono",
-    "serde_json",
-] }
-# 异步 runtime，锁定兼容 Rust 1.84 版本
-tokio = { version = "=1.36.0", features = ["full"] }
-tokio-stream = "=0.1.14"                             # 兼容 tokio 1.36
-# 错误处理，锁定兼容 Rust 1.84 版本
-thiserror = "=1.0.58"
+# SQLite 绑定
+rusqlite = { version = "0.40", features = ["bundled", "chrono", "serde_json"] }
+# 异步 runtime
+tokio = { version = "1", features = ["full"] }
+# 错误处理
+thiserror = "2"
 # 序列化
-serde = { version = "1.0", features = ["derive"] }
-bincode = "1.3"
+serde = { version = "1", features = ["derive"] }
+bincode = "2"
 # 时间处理
 chrono = { version = "0.4", features = ["serde"] }
-# 线程安全缓存，提升读性能
-dashmap = "5.4"
+# LRU 缓存
+dashmap = "6"
 moka = { version = "0.12", features = ["sync"] }
-# 字节处理，零拷贝优化
-bytes = "1.0"
+# 字节处理
+bytes = "1"
 futures = "0.3"
-# bbolt 嵌入式 KV 数据库（BoltDB 的 Rust 移植），B+树结构，ACID事务，内存映射文件，多读单写
+# KV 数据库
 jammdb = "0.11"
-# gRPC 框架
-tonic = "0.9"
-prost = "=0.11.9" # 和 tonic-build 版本一致
-# RESTful 框架，轻量无版本冲突
-warp = "0.3"
-# JSON序列化
-serde_json = "1.0"
-# base64编码
-base64 = "0.21"
-# 哈希算法，用于分片路由
-seahash = "1.0"
-# YAML 配置解析
+# gRPC
+tonic = "0.12"
+prost = "0.13"
+# RESTful
+warp = { version = "0.4", features = ["server"] }
+# JSON
+serde_json = "1"
+# base64
+base64 = "0.22"
+# 哈希路由
+seahash = "4"
+# YAML 配置
 serde_yaml = "0.9"
-# HTTP 客户端（Master 通过 RESTful 调用 Worker）
-reqwest = { version = "0.11", features = ["json"] }
-# WebSocket 服务端（Worker 提供 WS 服务）
-tokio-tungstenite = "0.21"
-# WebSocket 客户端（Master 通过 WS 调用 Worker）
+# HTTP 客户端
+reqwest = { version = "0.12", features = ["json"] }
+# WebSocket
+tokio-tungstenite = "0.24"
 futures-util = "0.3"
-# 系统健康监控
-num_cpus = "1.0"
+# 系统监控
+num_cpus = "1"
 libc = "0.2"
 
 
 [build-dependencies]
-tonic-build = "0.9"
+tonic-build = "0.12"

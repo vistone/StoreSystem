@@ -100,7 +100,7 @@ async fn handle_log_connection(
 struct LogWsResponse {
     status: String,
     message: String,
-    count: usize,
+    count: i64,
 }
 
 /// 处理日志消息

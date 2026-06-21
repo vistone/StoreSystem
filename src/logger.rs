@@ -132,10 +132,10 @@ pub struct LogQuery {
 /// Aggregate statistics returned by [`LogStore::get_log_stats`].
 #[derive(Debug, Clone)]
 pub struct LogStats {
-    pub total: usize,
-    pub unread: usize,
-    pub errors: usize,
-    pub today: usize,
+    pub total: i64,
+    pub unread: i64,
+    pub errors: i64,
+    pub today: i64,
     pub by_worker: Vec<(String, i64)>,
 }
 
@@ -224,7 +224,7 @@ impl LogStore {
 
     /// Append multiple entries in a single transaction.  Returns the number
     /// of rows inserted.
-    pub fn write_logs_batch(&self, entries: &[LogEntry]) -> Result<usize> {
+    pub fn write_logs_batch(&self, entries: &[LogEntry]) -> Result<i64> {
         if entries.is_empty() {
             return Ok(0);
         }
@@ -235,7 +235,7 @@ impl LogStore {
             .map_err(|_| StoreError::InvalidArgument("日志数据库锁定失败".to_string()))?;
 
         let tx = conn.unchecked_transaction()?;
-        let mut count = 0usize;
+        let mut count = 0i64;
 
         for entry in entries {
             tx.execute(
@@ -358,7 +358,7 @@ impl LogStore {
     }
 
     /// Count matching log entries (uses the same filter as [`query_logs`]).
-    pub fn count_logs(&self, query: &LogQuery) -> Result<usize> {
+    pub fn count_logs(&self, query: &LogQuery) -> Result<i64> {
         let (where_sql, values) = Self::build_where(query);
         let sql = format!("SELECT COUNT(*) FROM logs{}", where_sql);
 
@@ -367,10 +367,9 @@ impl LogStore {
             .lock()
             .map_err(|_| StoreError::InvalidArgument("日志数据库锁定失败".to_string()))?;
 
-        let count: usize =
-            conn.query_row(&sql, rusqlite::params_from_iter(values.iter()), |r| {
-                r.get(0)
-            })?;
+        let count: i64 = conn.query_row(&sql, rusqlite::params_from_iter(values.iter()), |r| {
+            r.get::<_, i64>(0)
+        })?;
 
         Ok(count)
     }
@@ -382,17 +381,17 @@ impl LogStore {
             .lock()
             .map_err(|_| StoreError::InvalidArgument("日志数据库锁定失败".to_string()))?;
 
-        let total: usize = conn.query_row("SELECT COUNT(*) FROM logs", [], |r| r.get(0))?;
+        let total: i64 = conn.query_row("SELECT COUNT(*) FROM logs", [], |r| r.get::<_, i64>(0))?;
 
-        let unread: usize = conn.query_row(
+        let unread: i64 = conn.query_row(
             "SELECT COUNT(*) FROM logs WHERE acknowledged = 0",
             [],
-            |r| r.get(0),
+            |r| r.get::<_, i64>(0),
         )?;
 
-        let errors: usize =
+        let errors: i64 =
             conn.query_row("SELECT COUNT(*) FROM logs WHERE level = 'error'", [], |r| {
-                r.get(0)
+                r.get::<_, i64>(0)
             })?;
 
         // Today's entries (UTC midnight as cutoff)
@@ -402,10 +401,10 @@ impl LogStore {
             .map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc))
             .unwrap_or_else(Utc::now);
 
-        let today: usize = conn.query_row(
+        let today: i64 = conn.query_row(
             "SELECT COUNT(*) FROM logs WHERE timestamp >= ?1",
             params![today_start.to_rfc3339()],
-            |r| r.get(0),
+            |r| r.get::<_, i64>(0),
         )?;
 
         let mut stmt = conn.prepare(
@@ -464,7 +463,7 @@ impl LogStore {
 
     /// Mark a batch of entries as acknowledged.  Returns the number of rows
     /// updated.
-    pub fn acknowledge_logs_batch(&self, ids: &[i64]) -> Result<usize> {
+    pub fn acknowledge_logs_batch(&self, ids: &[i64]) -> Result<i64> {
         if ids.is_empty() {
             return Ok(0);
         }
@@ -483,7 +482,7 @@ impl LogStore {
         let mut stmt = conn.prepare(&sql)?;
         let affected = stmt.execute(rusqlite::params_from_iter(ids))?;
 
-        Ok(affected)
+        Ok(affected as i64)
     }
 }
 
