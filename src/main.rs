@@ -218,12 +218,10 @@ async fn run_worker(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>
 
     println!("   注册到 Master: {}/{}", master_addr_http, wc.worker_id);
     // 注册到 Master（带重试，应对 Master 启动延迟）
-    let mut registered = false;
     for retry in 0..10 {
         match register_with_master(&master_addr_http, &wc.worker_id, &wc.listen_addr).await {
             Ok(_) => {
                 println!("   ✅ 注册成功");
-                registered = true;
                 break;
             }
             Err(e) => {

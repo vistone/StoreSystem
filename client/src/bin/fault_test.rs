@@ -33,6 +33,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!("✅ 写入完成: {:.1}s", start.elapsed().as_secs_f64());
 
+    // 等待刷盘完成（flusher 间隔 5ms，给 500ms 充足时间）
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
     // 阶段 1 验证：立即读取（flush 可能还在进行）
     let mut readable_after_write = 0;
     for i in 0u64..50 {

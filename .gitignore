@@ -6,7 +6,11 @@
 /data
 /worker_data
 /master_data
+/shard_data
 master_data_logs.db
+
+# 编译输出
+/bin
 
 # 数据库文件
 *.db
