@@ -1103,8 +1103,9 @@ impl proto::worker_service_server::WorkerService for WorkerService {
                         .map_err(|e| Status::invalid_argument(format!("Invalid tags: {}", e)))?,
                 )
             };
+            let epoch = &req.epoch;
             let meta = quad
-                .put(&req.quadkey, req.level, &req.key, value, ct, tags)
+                .put(epoch, &req.quadkey, req.level, &req.key, value, ct, tags)
                 .map_err(|e| Status::internal(e.to_string()))?;
             return Ok(Response::new(proto::PutResponse {
                 meta: Some(Self::convert_meta(meta)),
@@ -1161,8 +1162,9 @@ impl proto::worker_service_server::WorkerService for WorkerService {
                 .quad_shard
                 .as_ref()
                 .ok_or_else(|| Status::internal("QuadShardManager 未启用"))?;
+            let epoch = &req.epoch;
             let (value, meta) =
-                quad.get(&req.quadkey, req.level, &req.key)
+                quad.get(epoch, &req.quadkey, req.level, &req.key)
                     .map_err(|e| match e {
                         crate::error::StoreError::KeyNotFound(_) => {
                             Status::not_found(format!("Key not found: {}", req.key))
@@ -1204,7 +1206,8 @@ impl proto::worker_service_server::WorkerService for WorkerService {
                 .quad_shard
                 .as_ref()
                 .ok_or_else(|| Status::internal("QuadShardManager 未启用"))?;
-            quad.delete(&req.quadkey, req.level, &req.key)
+            let epoch = &req.epoch;
+            quad.delete(epoch, &req.quadkey, req.level, &req.key)
                 .map_err(|e| Status::internal(e.to_string()))?;
             return Ok(Response::new(proto::DeleteResponse { success: true }));
         }
@@ -1231,8 +1234,9 @@ impl proto::worker_service_server::WorkerService for WorkerService {
                 .quad_shard
                 .as_ref()
                 .ok_or_else(|| Status::internal("QuadShardManager 未启用"))?;
+            let epoch = &req.epoch;
             let exists = quad
-                .exists(&req.quadkey, req.level, &req.key)
+                .exists(epoch, &req.quadkey, req.level, &req.key)
                 .map_err(|e| Status::internal(e.to_string()))?;
             return Ok(Response::new(proto::ExistsResponse { exists }));
         }
@@ -1260,8 +1264,9 @@ impl proto::worker_service_server::WorkerService for WorkerService {
                 .quad_shard
                 .as_ref()
                 .ok_or_else(|| Status::internal("QuadShardManager 未启用"))?;
+            let epoch = &req.epoch;
             let metas = quad
-                .list(&req.quadkey, req.level, &req.prefix, req.limit as usize)
+                .list(epoch, &req.quadkey, req.level, &req.prefix, req.limit as usize)
                 .map_err(|e| Status::internal(e.to_string()))?;
             let proto_metas = metas.into_iter().map(Self::convert_meta).collect();
             return Ok(Response::new(proto::ListResponse { metas: proto_metas }));
@@ -1309,8 +1314,9 @@ impl proto::worker_service_server::WorkerService for WorkerService {
                             Status::invalid_argument(format!("Invalid tags: {}", e))
                         })?)
                     };
+                let epoch = &item.epoch;
                 let meta = quad
-                    .put(&item.quadkey, item.level, &item.key, value, ct, tags)
+                    .put(epoch, &item.quadkey, item.level, &item.key, value, ct, tags)
                     .map_err(|e| Status::internal(e.to_string()))?;
                 metas.push(Self::convert_meta(meta));
             }

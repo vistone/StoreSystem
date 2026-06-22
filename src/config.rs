@@ -455,9 +455,6 @@ pub struct QuadShardConfig {
     /// 数据根目录
     #[serde(default = "default_quad_data_dir")]
     pub data_dir: String,
-    /// 数据类型子目录
-    #[serde(default = "default_quad_data_type")]
-    pub data_type: String,
     /// KV 数据库扩展名
     #[serde(default = "default_kv_ext")]
     pub kv_ext: String,
@@ -481,9 +478,6 @@ fn default_split_level() -> u32 {
 fn default_quad_data_dir() -> String {
     "quad_data".to_string()
 }
-fn default_quad_data_type() -> String {
-    "objects".to_string()
-}
 
 impl Default for QuadShardConfig {
     fn default() -> Self {
@@ -491,7 +485,6 @@ impl Default for QuadShardConfig {
             base_level: default_base_level(),
             split_level: default_split_level(),
             data_dir: default_quad_data_dir(),
-            data_type: default_quad_data_type(),
             kv_ext: default_kv_ext(),
             meta_ext: default_meta_ext(),
             cache_size: default_cache_size(),

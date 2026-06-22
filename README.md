@@ -1,6 +1,6 @@
 # Store System
 
-**版本**: 0.1.5
+**版本**: 0.1.6
 
 一个高性能的嵌入式键值存储系统，基于 bbolt (jammdb) + SQLite 双存储引擎，提供 gRPC 和 RESTful 双接口，支持写合并优化、WAL 原子写入、副本故障转移和大 Value（最大 100MB）读写。
 
@@ -18,6 +18,7 @@
 - **多节点集群**：Master-Worker 架构，支持动态注册/心跳/故障检测
 - **QuadKey 区域路由**：按 quadkey[0] 将数据分流到 4 个区域 Worker，互不交叉
 - **QuadKey 分片存储**：level≤8→base, 8<level<18→4位前缀, level≥18→8位前缀
+- **Epoch 桶隔离**：不同 epoch 版本数据目录隔离，支持全量快照式数据管理
 - **动态数据类型路由**：RESTful `/{data_type}/{key}` 替代硬编码 `/objects/`
 - **Master 统一配置**：kv_name/kv_ext/cache_size 等由 Master 统一下发 Worker
 - **分片存储**：ShardManager 支持数据分片，独立 WAL 恢复
@@ -145,12 +146,12 @@ cargo build --release --bin fault_test
 
 | 方法 | 请求 | 响应 | 说明 |
 |------|------|------|------|
-| `Put` | `PutRequest{key, value, content_type, tags, quadkey?, level?}` | `PutResponse{meta}` | quadkey非空→区域路由，空→哈希路由 |
-| `Get` | `GetRequest{key, quadkey?, level?}` | `GetResponse{value, meta}` | 同上 |
-| `Delete` | `DeleteRequest{key, quadkey?, level?}` | `DeleteResponse{success}` | 同上 |
-| `Exists` | `ExistsRequest{key, quadkey?, level?}` | `ExistsResponse{exists}` | 同上 |
-| `List` | `ListRequest{prefix, limit, quadkey?, level?}` | `ListResponse{metas}` | 同上 |
-| `PutBatch` | `PutBatchRequest{items[]}` | `PutBatchResponse{metas[]}` | items[] 每条含 quadkey, level |
+| `Put` | `PutRequest{key, value, content_type, tags, epoch, quadkey?, level?}` | `PutResponse{meta}` | epoch 指定版本桶，quadkey非空→区域路由，空→哈希路由 |
+| `Get` | `GetRequest{key, epoch, quadkey?, level?}` | `GetResponse{value, meta}` | 同上 |
+| `Delete` | `DeleteRequest{key, epoch, quadkey?, level?}` | `DeleteResponse{success}` | 同上 |
+| `Exists` | `ExistsRequest{key, epoch, quadkey?, level?}` | `ExistsResponse{exists}` | 同上 |
+| `List` | `ListRequest{prefix, limit, epoch, quadkey?, level?}` | `ListResponse{metas}` | 同上 |
+| `PutBatch` | `PutBatchRequest{items[]}` | `PutBatchResponse{metas[]}` | items[] 每条含 epoch, quadkey, level |
 
 ### Master 管理接口 (gRPC)
 
@@ -273,7 +274,7 @@ Worker-1 (主副本)                    Worker-2 (备副本)
 | 9-17 | quadkey[..4] | `{dir}/{type}/12/3021.kv` |
 | ≥ 18 | quadkey[..8] | `{dir}/{type}/20/30211234.kv` |
 
-## v0.1.5 性能指标
+## v0.1.6 性能指标
 
 ### 测试环境
 

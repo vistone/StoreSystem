@@ -1027,6 +1027,7 @@ impl MasterStoreService {
             tags: req.tags,
             quadkey: req.quadkey,
             level: req.level,
+            epoch: req.epoch,
         });
 
         let response = client
@@ -1058,6 +1059,7 @@ impl MasterStoreService {
             key: req.key,
             quadkey: req.quadkey,
             level: req.level,
+            epoch: req.epoch,
         });
 
         let response = client
@@ -1089,6 +1091,7 @@ impl MasterStoreService {
             key: req.key,
             quadkey: req.quadkey,
             level: req.level,
+            epoch: req.epoch,
         });
 
         let response = client
@@ -1120,6 +1123,7 @@ impl MasterStoreService {
             key: req.key,
             quadkey: req.quadkey,
             level: req.level,
+            epoch: req.epoch,
         });
 
         let response = client
@@ -1152,6 +1156,7 @@ impl MasterStoreService {
             limit: req.limit,
             quadkey: req.quadkey,
             level: req.level,
+            epoch: req.epoch,
         });
 
         let response = client
