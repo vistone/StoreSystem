@@ -1,6 +1,6 @@
 # Store System
 
-**版本**: 0.1.6
+**版本**: 0.1.7
 
 一个高性能的嵌入式键值存储系统，基于 bbolt (jammdb) + SQLite 双存储引擎，提供 gRPC 和 RESTful 双接口，支持写合并优化、WAL 原子写入、副本故障转移和大 Value（最大 100MB）读写。
 
@@ -276,7 +276,7 @@ Worker-1 (主副本)                    Worker-2 (备副本)
 | 9-17 | quadkey[..4] | `{dir}/{type}/12/3021.kv` |
 | ≥ 18 | quadkey[..8] | `{dir}/{type}/20/30211234.kv` |
 
-## v0.1.6 性能指标
+## v0.1.7 性能指标
 
 ### 测试环境
 
@@ -464,19 +464,19 @@ rm -rf data/ master_data/ worker_data/
 | 依赖 | 版本 | 用途 |
 |------|------|------|
 | jammdb | 0.11 | bbolt 的 Rust 移植，B+树 KV |
-| rusqlite | 0.29 | SQLite 绑定（bundled） |
-| tonic | 0.9 | gRPC 框架 |
-| warp | 0.3 | RESTful 框架 |
-| tokio | 1.36 | 异步运行时 |
-| moka | 0.12 | LRU 线程安全缓存（v0.1.1 新增） |
-| dashmap | 5.4 | 线程安全哈希表 |
-| bytes | 1.0 | 零拷贝字节处理 |
+| rusqlite | 0.40 | SQLite 绑定（bundled） |
+| tonic | 0.12 | gRPC 框架 |
+| warp | 0.4 | RESTful 框架 |
+| tokio | 1 | 异步运行时 |
+| moka | 0.12 | LRU 线程安全缓存 |
+| dashmap | 6 | 线程安全哈希表 |
+| bytes | 1 | 零拷贝字节处理 |
 | chrono | 0.4 | 时间处理 |
-| seahash | 1.0 | Rendezvous Hashing 路由 |
+| seahash | 4 | Rendezvous Hashing 路由 |
 | serde_yaml | 0.9 | YAML 配置解析 |
-| reqwest | 0.11 | HTTP 客户端（Master→Worker） |
-| tokio-tungstenite | 0.21 | WebSocket（Worker 日志推送） |
-| num_cpus | 1.0 | CPU 核心数检测 |
+| reqwest | 0.12 | HTTP 客户端（Master→Worker） |
+| tokio-tungstenite | 0.24 | WebSocket（Worker 日志推送） |
+| num_cpus | 1 | CPU 核心数检测 |
 | libc | 0.2 | 系统调用（statvfs） |
 
 ## 许可证
