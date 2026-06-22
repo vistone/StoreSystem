@@ -29,7 +29,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for i in 0u64..50 {
         let key = format!("rep_{:04}", i);
         let value = vec![(i % 256) as u8; 1024 * 1024]; // 1MB
-        grpc.put_single(&key, value).await?;
+        let quadkey = grpc_client::key_to_quadkey(&key);
+        grpc.put(&key, value, &quadkey, 10).await?;
     }
     println!("✅ 写入完成: {:.1}s", start.elapsed().as_secs_f64());
 
@@ -40,7 +41,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut readable_after_write = 0;
     for i in 0u64..50 {
         let key = format!("rep_{:04}", i);
-        if grpc.get_single(&key).await.is_ok() {
+        let quadkey = grpc_client::key_to_quadkey(&key);
+        if grpc.get(&key, &quadkey, 10).await.is_ok() {
             readable_after_write += 1;
         }
     }
@@ -66,7 +68,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut read_failures = Vec::new();
     for i in 0u64..50 {
         let key = format!("rep_{:04}", i);
-        match grpc.get_single(&key).await {
+        let quadkey = grpc_client::key_to_quadkey(&key);
+        match grpc.get(&key, &quadkey, 10).await {
             Ok(v) => {
                 read_after_kill += 1;
                 assert_eq!(v.len(), 1024 * 1024, "数据损坏: {}", key);
@@ -108,7 +111,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let i = total.fetch_add(1, Ordering::Relaxed);
                 let key = format!("outage_{:06}", i);
                 let value = vec![(i % 256) as u8; 64 * 1024]; // 64KB
-                if client.put_single(&key, value).await.is_err() {
+                let qk = grpc_client::key_to_quadkey(&key);
+                if client.put(&key, value, &qk, 10).await.is_err() {
                     errors.fetch_add(1, Ordering::Relaxed);
                 }
             }
@@ -155,7 +159,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut post_missing = Vec::new();
     for i in 0u64..50 {
         let key = format!("rep_{:04}", i);
-        match grpc.get_single(&key).await {
+        let quadkey = grpc_client::key_to_quadkey(&key);
+        match grpc.get(&key, &quadkey, 10).await {
             Ok(v) => {
                 post_recovery_read += 1;
                 if v.len() != 1024 * 1024 {

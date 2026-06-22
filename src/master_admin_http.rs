@@ -308,7 +308,7 @@ pub async fn start_admin_api(ctx: AdminContext, port: u16) {
         .recover(handle_rejection);
 
     println!("📊 Master Admin API running on http://0.0.0.0:{}", port);
-    warp::serve(routes).bind(([0, 0, 0, 0], port)).await;
+    warp::serve(routes).run(([0, 0, 0, 0], port)).await;
 }
 
 // ============================================================

@@ -174,7 +174,8 @@ async fn run_worker(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>
     .with_cache_size(wc.cache_size)
     .with_flush_interval(wc.flush_interval_ms)
     .with_heartbeat_interval(wc.heartbeat_interval_secs)
-    .with_weight(wc.weight);
+    .with_weight(wc.weight)
+    .with_quad_shard_config(config.quad_shard.clone());
 
     let node = WorkerNode::open(worker_config)?;
 

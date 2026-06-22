@@ -15,7 +15,6 @@ global:
   # 可选值: "grpc" | "restful" | "ws" | "both"
   protocol: "both"
 
-
 # ---------- Master 节点配置 ----------
 master:
   # Master 监听地址
@@ -26,10 +25,10 @@ master:
   heartbeat_timeout_secs: 30
   # 清理宕机 Worker 的间隔（秒）
   cleanup_interval_secs: 60
-  # ---------- 统一存储配置（Master 下发给所有 Worker） ----------
-  kv_name: "kv"
-  kv_ext: ".db"
-  meta_name: "meta"
-  meta_ext: ".db"
+  # ---------- 统一存储配置（Master 统一定义，下发给所有 Worker） ----------
+  # 数据库文件名由 quad_shard.kv_name_template 模板决定（如 "kv_{}"），
+  # 此处只定义扩展名和性能参数
+  kv_ext: ".g3db"
+  meta_ext: ".bulk"
   cache_size: 10000
   flush_interval_ms: 5

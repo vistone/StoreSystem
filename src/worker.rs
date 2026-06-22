@@ -102,6 +102,12 @@ impl WorkerConfig {
         self.shard_configs = Some(configs);
         self
     }
+
+    /// 设置 QuadKey 分片配置（启用 QuadKey 分片模式）
+    pub fn with_quad_shard_config(mut self, config: QuadShardConfig) -> Self {
+        self.quad_shard_config = Some(config);
+        self
+    }
 }
 
 // ============================================================
@@ -1053,6 +1059,19 @@ impl WorkerService {
             tags: meta.tags.map(|t| t.to_string()).unwrap_or_default(),
         }
     }
+
+    /// 判断是否应该走 QuadKey 分片路由
+    /// 需要 quadkey 非空、level > 0、且 quadkey 长度足够支持当前 level
+    fn should_use_quadkey(quadkey: &str, level: u32) -> bool {
+        if quadkey.is_empty() || level == 0 {
+            return false;
+        }
+        // level ≤ base_level(8) 时存入 base DB，不需要 quadkey 前缀
+        // level > base_level 时需要至少 4 位前缀
+        // level ≥ split_level(18) 时需要至少 8 位前缀
+        let min_len = if level >= 18 { 8 } else if level > 8 { 4 } else { 0 };
+        quadkey.len() >= min_len
+    }
 }
 
 #[tonic::async_trait]
@@ -1064,7 +1083,7 @@ impl proto::worker_service_server::WorkerService for WorkerService {
         let req = request.into_inner();
 
         // QuadKey 分片路由
-        if !req.quadkey.is_empty() && req.level > 0 {
+        if Self::should_use_quadkey(&req.quadkey, req.level) {
             let quad = self
                 .node
                 .quad_shard
@@ -1136,7 +1155,7 @@ impl proto::worker_service_server::WorkerService for WorkerService {
         let req = request.into_inner();
 
         // QuadKey 分片路由
-        if !req.quadkey.is_empty() && req.level > 0 {
+        if Self::should_use_quadkey(&req.quadkey, req.level) {
             let quad = self
                 .node
                 .quad_shard
@@ -1179,7 +1198,7 @@ impl proto::worker_service_server::WorkerService for WorkerService {
         let req = request.into_inner();
 
         // QuadKey 分片路由
-        if !req.quadkey.is_empty() && req.level > 0 {
+        if Self::should_use_quadkey(&req.quadkey, req.level) {
             let quad = self
                 .node
                 .quad_shard
@@ -1206,7 +1225,7 @@ impl proto::worker_service_server::WorkerService for WorkerService {
         let req = request.into_inner();
 
         // QuadKey 分片路由
-        if !req.quadkey.is_empty() && req.level > 0 {
+        if Self::should_use_quadkey(&req.quadkey, req.level) {
             let quad = self
                 .node
                 .quad_shard
@@ -1235,7 +1254,7 @@ impl proto::worker_service_server::WorkerService for WorkerService {
         let req = request.into_inner();
 
         // QuadKey 分片路由
-        if !req.quadkey.is_empty() && req.level > 0 {
+        if Self::should_use_quadkey(&req.quadkey, req.level) {
             let quad = self
                 .node
                 .quad_shard
@@ -1268,7 +1287,7 @@ impl proto::worker_service_server::WorkerService for WorkerService {
         let req = request.into_inner();
 
         // QuadKey 分片路由：检查第一个 item 决定是否走 quad 路由
-        if !req.items.is_empty() && !req.items[0].quadkey.is_empty() && req.items[0].level > 0 {
+        if !req.items.is_empty() && Self::should_use_quadkey(&req.items[0].quadkey, req.items[0].level) {
             let quad = self
                 .node
                 .quad_shard
