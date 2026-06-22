@@ -1,14 +1,12 @@
-# Worker-2 — quadkey 区域 2
+# Worker-2 — 极简启动配置
+# region 由 Master 根据 master.yaml 的 worker_regions 分配
+# 其余配置（扩展名、性能参数、quad_shard）由 Master 注册时下发
 mode: worker
 global:
   max_message_size: 268435456
   protocol: "both"
 worker:
   worker_id: "worker-2"
-  region: "2"
   listen_addr: "0.0.0.0:50063"
   master_addr: "http://127.0.0.1:50051"
   data_dir: "worker_data/worker-2"
-  heartbeat_interval_secs: 10
-  weight: 1
-  master_ws_addr: "127.0.0.1:50053"

@@ -108,6 +108,12 @@ impl WorkerConfig {
         self.quad_shard_config = Some(config);
         self
     }
+
+    /// 设置 QuadKey 分片配置（Option 版本，None 时不启用）
+    pub fn with_quad_shard_config_option(mut self, config: Option<QuadShardConfig>) -> Self {
+        self.quad_shard_config = config;
+        self
+    }
 }
 
 // ============================================================
@@ -438,6 +444,27 @@ impl WorkerNode {
     }
 
     /// 启动单库模式的后台刷盘任务
+    /// 热更新性能参数（cache_size、flush_interval_ms、heartbeat_interval_secs、weight）
+    ///
+    /// 当前实现：仅记录新值到日志，不动态修改运行中的 KvStore/flusher。
+    /// 完全生效需要重启 Worker（路径类参数任何情况都需重启）。
+    ///
+    /// 此方法通过 `Arc<WorkerNode>` 调用，因此接收不可变 `&self`，
+    /// 内部仅打印日志提示运维方重启以应用新配置。
+    pub fn update_performance_config(
+        &self,
+        cache_size: Option<usize>,
+        flush_interval_ms: Option<u64>,
+        heartbeat_interval_secs: Option<u64>,
+        weight: Option<i32>,
+    ) {
+        eprintln!(
+            "[Worker] 收到配置热更新: cache_size={:?}, flush_interval_ms={:?}, heartbeat_interval_secs={:?}, weight={:?}",
+            cache_size, flush_interval_ms, heartbeat_interval_secs, weight
+        );
+        eprintln!("[Worker] 提示：性能参数完全生效需重启 Worker");
+    }
+
     pub fn start_flusher(&self) {
         if let Some(wb) = &self.write_buffer {
             if let (Some(kv), Some(meta)) = (&self.kv_store, &self.meta_store) {

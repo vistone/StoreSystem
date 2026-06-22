@@ -113,6 +113,35 @@ pub struct MasterNode {
     http_clients: Arc<DashMap<String, WorkerHttpClient>>,
     /// Worker WS 客户端缓存
     ws_clients: Arc<DashMap<String, WorkerWsClient>>,
+    /// Worker 默认配置（Master 持有，注册时下发给 Worker）
+    worker_defaults: Arc<crate::config::WorkerDefaultsConfig>,
+    /// Worker 区域分配映射（worker_id → region）
+    worker_regions: Arc<HashMap<String, String>>,
+    /// 配置版本号（每次变更递增，初始为 1）
+    config_version: Arc<std::sync::atomic::AtomicU64>,
+}
+
+/// Master 下发给 Worker 的配置载体
+#[derive(Debug, Clone)]
+pub struct WorkerConfigPayload {
+    /// 配置版本号
+    pub config_version: u64,
+    /// Worker 负责的 quadkey 区域
+    pub region: String,
+    /// KV 数据库文件扩展名
+    pub kv_ext: String,
+    /// Meta 数据库文件扩展名
+    pub meta_ext: String,
+    /// 缓存大小
+    pub cache_size: usize,
+    /// 刷盘间隔（毫秒）
+    pub flush_interval_ms: u64,
+    /// 心跳间隔（秒）
+    pub heartbeat_interval_secs: u64,
+    /// Worker 权重
+    pub weight: i32,
+    /// QuadKey 分片配置
+    pub quad_shard: crate::config::QuadShardConfig,
 }
 
 impl std::fmt::Debug for MasterNode {
@@ -186,31 +215,79 @@ impl MasterNode {
             worker_clients: Arc::new(DashMap::new()),
             http_clients: Arc::new(DashMap::new()),
             ws_clients: Arc::new(DashMap::new()),
+            worker_defaults: Arc::new(crate::config::WorkerDefaultsConfig::default()),
+            worker_regions: Arc::new(HashMap::new()),
+            config_version: Arc::new(std::sync::atomic::AtomicU64::new(1)),
         })
     }
 
+    /// 使用 Worker 默认配置和区域映射打开 Master 节点
+    ///
+    /// Master 启动时加载 `worker_defaults` 和 `worker_regions`，
+    /// 在 Worker 注册时返回完整配置。
+    pub fn open_with_worker_defaults(
+        config: MasterConfig,
+        protocol: &str,
+        worker_defaults: crate::config::WorkerDefaultsConfig,
+        worker_regions: HashMap<String, String>,
+    ) -> Result<Self> {
+        // 复用 open_with_protocol 的初始化逻辑，再注入新字段
+        let mut node = Self::open_with_protocol(config, protocol)?;
+        node.worker_defaults = Arc::new(worker_defaults);
+        node.worker_regions = Arc::new(worker_regions);
+        Ok(node)
+    }
+
+    /// 获取当前配置版本号
+    pub fn config_version(&self) -> u64 {
+        self.config_version.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// 递增配置版本号（配置变更后调用）
+    pub fn bump_config_version(&self) -> u64 {
+        self.config_version
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1
+    }
+
     /// 注册 Worker（同时写入内存缓存和 SQLite 持久化）
+    ///
+    /// region 由 Master 根据 `worker_regions` 映射分配，
+    /// 客户端传入的 region 参数会被忽略。
+    /// 注册成功后返回完整 WorkerConfig 供 Worker 初始化使用。
     pub async fn register_worker(
         &self,
         worker_id: &str,
         address: &str,
         weight: i32,
         tags: HashMap<String, String>,
-        region: &str,
-    ) -> Result<()> {
-        // 先写入 SQLite 持久化（用 spawn_blocking 包装同步 I/O）
+        _client_region: &str,
+    ) -> Result<WorkerConfigPayload> {
+        // 1. 查 worker_regions 获取 region，找不到则拒绝注册
+        let region = self
+            .worker_regions
+            .get(worker_id)
+            .cloned()
+            .ok_or_else(|| {
+                StoreError::InvalidArgument(format!(
+                    "Worker '{}' 未在 master.yaml 的 worker_regions 中配置，拒绝注册",
+                    worker_id
+                ))
+            })?;
+
+        // 2. 写入 SQLite 持久化（用 spawn_blocking 包装同步 I/O）
         let store = self.store.clone();
         let wid = worker_id.to_string();
         let addr = address.to_string();
         let tags_clone = tags.clone();
-        let region_clone = region.to_string();
+        let region_clone = region.clone();
         tokio::task::spawn_blocking(move || {
             store.register_worker(&wid, &addr, weight, &tags_clone, &region_clone)
         })
         .await
         .map_err(|e| StoreError::InvalidArgument(format!("spawn_blocking 失败: {}", e)))??;
 
-        // 再更新内存缓存
+        // 3. 更新内存缓存
         let mut workers = self.workers.write().await;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -229,7 +306,7 @@ impl MasterNode {
                 storage_capacity_bytes: 0,
                 active_connections: 0,
                 tags,
-                region: region.to_string(),
+                region: region.clone(),
                 storage_usage_ratio: 0.0,
                 disk_health: "Unknown".to_string(),
                 memory_used_bytes: 0,
@@ -248,10 +325,22 @@ impl MasterNode {
             },
         );
 
-        // 清除旧的客户端连接缓存
+        // 4. 清除旧的客户端连接缓存
         self.worker_clients.remove(worker_id);
 
-        Ok(())
+        // 5. 构建下发给 Worker 的配置
+        let wd = &self.worker_defaults;
+        Ok(WorkerConfigPayload {
+            config_version: self.config_version(),
+            region,
+            kv_ext: wd.kv_ext.clone(),
+            meta_ext: wd.meta_ext.clone(),
+            cache_size: wd.cache_size,
+            flush_interval_ms: wd.flush_interval_ms,
+            heartbeat_interval_secs: wd.heartbeat_interval_secs,
+            weight,
+            quad_shard: wd.quad_shard.clone(),
+        })
     }
 
     /// 处理 Worker 心跳（同时更新内存缓存和 SQLite 持久化）
@@ -1445,7 +1534,8 @@ impl proto::master_service_server::MasterService for MasterAdminService {
     ) -> std::result::Result<Response<proto::RegisterWorkerResponse>, Status> {
         let req = request.into_inner();
 
-        self.master
+        let payload = self
+            .master
             .register_worker(
                 &req.worker_id,
                 &req.address,
@@ -1456,9 +1546,32 @@ impl proto::master_service_server::MasterService for MasterAdminService {
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
+        // 将 WorkerConfigPayload 转换为 proto::WorkerConfig 下发给 Worker
+        let quad_shard_proto = proto::QuadShardConfig {
+            base_level: payload.quad_shard.base_level,
+            split_level: payload.quad_shard.split_level,
+            data_dir: payload.quad_shard.data_dir.clone(),
+            kv_ext: payload.quad_shard.kv_ext.clone(),
+            meta_ext: payload.quad_shard.meta_ext.clone(),
+            cache_size: payload.quad_shard.cache_size as u64,
+            flush_interval_ms: payload.quad_shard.flush_interval_ms,
+        };
+        let worker_config = proto::WorkerConfig {
+            region: payload.region,
+            kv_ext: payload.kv_ext,
+            meta_ext: payload.meta_ext,
+            cache_size: payload.cache_size as u64,
+            flush_interval_ms: payload.flush_interval_ms,
+            heartbeat_interval_secs: payload.heartbeat_interval_secs,
+            weight: payload.weight,
+            quad_shard: Some(quad_shard_proto),
+        };
+
         Ok(Response::new(proto::RegisterWorkerResponse {
             success: true,
             message: format!("Worker {} 注册成功", req.worker_id),
+            config: Some(worker_config),
+            config_version: payload.config_version,
         }))
     }
 
@@ -1564,5 +1677,90 @@ impl proto::master_service_server::MasterService for MasterAdminService {
             worker_id: worker.worker_id,
             address: worker.address,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{QuadShardConfig, WorkerDefaultsConfig};
+    use std::collections::HashMap;
+
+    /// 构造测试用的 WorkerDefaultsConfig
+    fn test_worker_defaults() -> WorkerDefaultsConfig {
+        WorkerDefaultsConfig {
+            kv_ext: ".g3db".to_string(),
+            meta_ext: ".bulk".to_string(),
+            cache_size: 10000,
+            flush_interval_ms: 5,
+            heartbeat_interval_secs: 10,
+            weight: 1,
+            quad_shard: QuadShardConfig {
+                base_level: 8,
+                split_level: 18,
+                data_dir: "quad_data".to_string(),
+                kv_ext: ".kv".to_string(),
+                meta_ext: ".db".to_string(),
+                cache_size: 10000,
+                flush_interval_ms: 5,
+            },
+        }
+    }
+
+    /// 构造测试用的 worker_regions 映射
+    fn test_worker_regions() -> HashMap<String, String> {
+        let mut m = HashMap::new();
+        m.insert("worker-0".to_string(), "0".to_string());
+        m.insert("worker-1".to_string(), "1".to_string());
+        m
+    }
+
+    #[tokio::test]
+    async fn test_register_returns_config() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut master_config = MasterConfig::default();
+        master_config.meta_path = tmp.path().to_string_lossy().to_string();
+
+        let master = MasterNode::open_with_worker_defaults(
+            master_config,
+            "both",
+            test_worker_defaults(),
+            test_worker_regions(),
+        )
+        .unwrap();
+
+        // 注册 worker（region 由 Master 分配，传入空字符串）
+        let payload = master
+            .register_worker("worker-0", "0.0.0.0:50061", 1, HashMap::new(), "")
+            .await
+            .unwrap();
+
+        // 验证返回的配置
+        assert_eq!(payload.region, "0");
+        assert_eq!(payload.kv_ext, ".g3db");
+        assert_eq!(payload.meta_ext, ".bulk");
+        assert_eq!(payload.cache_size, 10000);
+        assert_eq!(payload.config_version, 1);
+    }
+
+    #[tokio::test]
+    async fn test_register_unknown_worker_rejected() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut master_config = MasterConfig::default();
+        master_config.meta_path = tmp.path().to_string_lossy().to_string();
+
+        let master = MasterNode::open_with_worker_defaults(
+            master_config,
+            "both",
+            test_worker_defaults(),
+            test_worker_regions(),
+        )
+        .unwrap();
+
+        // 注册未在 worker_regions 中的 worker，应失败
+        let result = master
+            .register_worker("worker-99", "0.0.0.0:50099", 1, HashMap::new(), "")
+            .await;
+        assert!(result.is_err());
     }
 }

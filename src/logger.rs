@@ -550,6 +550,11 @@ pub struct WorkerLogger {
     flush_interval_ms: u64,
     /// Shared WebSocket write-half.  `None` when not connected.
     ws_sink: tokio::sync::Mutex<Option<WsSink>>,
+    /// 配置更新回调（Master 推送 config_update 消息时触发）
+    /// 使用 std::sync::Mutex 因为只在构造时写一次，之后只读
+    config_update_handler: std::sync::Arc<
+        std::sync::Mutex<Option<Box<dyn Fn(String) + Send + Sync>>>,
+    >,
 }
 
 impl WorkerLogger {
@@ -569,6 +574,7 @@ impl WorkerLogger {
             max_buffer_size: 1000,
             flush_interval_ms: 1000,
             ws_sink: tokio::sync::Mutex::new(None),
+            config_update_handler: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -581,6 +587,17 @@ impl WorkerLogger {
     /// Override the maximum buffer size (entries).
     pub fn with_max_buffer(mut self, size: usize) -> Self {
         self.max_buffer_size = size;
+        self
+    }
+
+    /// 设置配置更新回调（Master 推送 config_update 消息时触发）
+    ///
+    /// 回调参数为配置 JSON 字符串。
+    pub fn with_config_update_handler<F>(self, handler: F) -> Self
+    where
+        F: Fn(String) + Send + Sync + 'static,
+    {
+        *self.config_update_handler.lock().unwrap() = Some(Box::new(handler));
         self
     }
 
@@ -743,7 +760,22 @@ impl WorkerLogger {
         loop {
             match tokio_tungstenite::connect_async(&ws_url).await {
                 Ok((ws_stream, _)) => {
-                    let (sink, mut stream) = ws_stream.split();
+                    let (mut sink, mut stream) = ws_stream.split();
+
+                    // 连接建立后发送 register 消息，绑定 worker_id
+                    let register_msg = format!(
+                        r#"{{"action":"register","worker_id":"{}"}}"#,
+                        self.worker_id
+                    );
+                    if sink
+                        .send(tokio_tungstenite::tungstenite::Message::Text(register_msg))
+                        .await
+                        .is_err()
+                    {
+                        // 注册失败则放弃此连接，等待重连
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        continue;
+                    }
 
                     // Make the new sink available to flush().
                     {
@@ -751,14 +783,31 @@ impl WorkerLogger {
                         *guard = Some(sink);
                     }
 
-                    // Drain the read side until the connection closes.
-                    // This is required so the server's write buffer does not
-                    // fill up (the Master sends per-batch acknowledgements).
+                    // 读取循环：识别 config_update 消息并触发回调
                     while let Some(msg) = stream.next().await {
                         match msg {
-                            Ok(_) => {} // acknowledgements discarded
+                            Ok(tokio_tungstenite::tungstenite::Message::Text(text)) => {
+                                // 检查是否为 config_update 消息
+                                let is_config_update = serde_json::from_str::<serde_json::Value>(&text)
+                                    .ok()
+                                    .and_then(|v| {
+                                        v.get("type")
+                                            .and_then(|t| t.as_str())
+                                            .map(|s| s == "config_update")
+                                    })
+                                    .unwrap_or(false);
+
+                                if is_config_update {
+                                    if let Some(handler) =
+                                        self.config_update_handler.lock().unwrap().as_ref()
+                                    {
+                                        handler(text);
+                                    }
+                                }
+                                // 其他消息（日志 ACK 等）丢弃
+                            }
+                            Ok(_) => {} // 其他类型消息丢弃
                             Err(e) => {
-                                // WorkerLogger 自身的连接状态日志，此时可能尚未连接 Master，无法通过日志系统输出
                                 eprintln!("[WorkerLogger] WS 读取错误: {}", e);
                                 break;
                             }
@@ -772,11 +821,9 @@ impl WorkerLogger {
                         *guard = None;
                     }
 
-                    // WorkerLogger 自身的连接状态日志，此时可能尚未连接 Master，无法通过日志系统输出
                     eprintln!("[WorkerLogger] WS 连接断开，5 秒后重连…");
                 }
                 Err(e) => {
-                    // WorkerLogger 自身的连接状态日志，此时可能尚未连接 Master，无法通过日志系统输出
                     eprintln!("[WorkerLogger] WS 连接失败: {} (5 秒后重试)", e);
                 }
             }

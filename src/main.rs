@@ -15,7 +15,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
 
     // 解析命令行参数
-    let mut config_path = "config.yaml".to_string();
+    // 默认配置文件为 master.yaml（Master 统一配置管理架构）
+    let mut config_path = "master.yaml".to_string();
     let mut mode: Option<String> = None;
     let mut i = 1;
     while i < args.len() {
@@ -49,18 +50,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 args[0]
             );
             eprintln!();
-            eprintln!("  方式一（推荐）：使用专用配置文件");
+            eprintln!("  Master 统一配置管理架构：");
             eprintln!("    Master:   ./store_system --config master.yaml");
-            eprintln!("    Worker:   ./store_system --config worker.yaml");
-            eprintln!("    单机:     ./store_system --config config.yaml standalone");
+            eprintln!("    Worker:   ./store_system --config worker-0.yaml");
+            eprintln!("    单机:     ./store_system --config master.yaml standalone");
             eprintln!();
-            eprintln!("  方式二：使用通用配置文件 + 命令行模式");
-            eprintln!("    Master:   ./store_system --config config.yaml master");
-            eprintln!("    Worker:   ./store_system --config config.yaml worker");
-            eprintln!("    单机:     ./store_system --config config.yaml standalone");
-            eprintln!();
-            eprintln!("  方式三：使用默认 config.yaml（mode 字段决定模式）");
-            eprintln!("    ./store_system");
+            eprintln!("  不指定 --config 时默认加载 master.yaml");
             Ok(())
         }
     }
@@ -73,12 +68,17 @@ async fn run_master(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>
     let mc = &config.master;
     let gc = &config.global;
 
-    let master = MasterNode::open(store_system::master::MasterConfig {
-        listen_addr: mc.listen_addr.clone(),
-        meta_path: mc.meta_path.clone(),
-        heartbeat_timeout_secs: mc.heartbeat_timeout_secs,
-        cleanup_interval_secs: mc.cleanup_interval_secs,
-    })?;
+    let master = MasterNode::open_with_worker_defaults(
+        store_system::master::MasterConfig {
+            listen_addr: mc.listen_addr.clone(),
+            meta_path: mc.meta_path.clone(),
+            heartbeat_timeout_secs: mc.heartbeat_timeout_secs,
+            cleanup_interval_secs: mc.cleanup_interval_secs,
+        },
+        &gc.protocol,
+        config.worker_defaults.clone(),
+        config.worker_regions.clone(),
+    )?;
     let master = Arc::new(master);
 
     // 初始化日志存储（SQLite 持久化）
@@ -163,19 +163,75 @@ async fn run_worker(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>
     // 确保数据目录存在
     std::fs::create_dir_all(&wc.data_dir)?;
 
+    // 推导 Master WebSocket 地址（同主机 + :50053）
+    let master_ws_addr = derive_master_ws_addr(&wc.master_addr);
+
+    // 注册到 Master（带重试，应对 Master 启动延迟）
+    let master_addr_http = if wc.master_addr.starts_with("http") {
+        wc.master_addr.clone()
+    } else {
+        format!("http://{}", wc.master_addr)
+    };
+
+    println!("   注册到 Master: {}/{}", master_addr_http, wc.worker_id);
+
+    let proto_config = {
+        let mut acquired: Option<store_system::grpc::proto::WorkerConfig> = None;
+        for retry in 0..10 {
+            match register_with_master(&master_addr_http, &wc.worker_id, &wc.listen_addr).await {
+                Ok(cfg) => {
+                    println!("   ✅ 注册成功, 配置版本: 来自 Master");
+                    acquired = Some(cfg);
+                    break;
+                }
+                Err(e) => {
+                    if retry < 9 {
+                        let delay = std::time::Duration::from_millis(1000 * (retry + 1) as u64);
+                        eprintln!("   ⚠️  注册失败 (重试 {}/10): {}", retry + 1, e);
+                        tokio::time::sleep(delay).await;
+                    } else {
+                        return Err(format!("❌ 注册最终失败: {}", e).into());
+                    }
+                }
+            }
+        }
+        acquired.expect("注册成功后必有配置")
+    };
+
+    // 用 Master 下发的配置构建 WorkerConfig
+    let quad_shard_config = proto_config
+        .quad_shard
+        .as_ref()
+        .map(|qs| store_system::config::QuadShardConfig {
+            base_level: qs.base_level,
+            split_level: qs.split_level,
+            data_dir: qs.data_dir.clone(),
+            kv_ext: qs.kv_ext.clone(),
+            meta_ext: qs.meta_ext.clone(),
+            cache_size: qs.cache_size as usize,
+            flush_interval_ms: qs.flush_interval_ms,
+        });
+
+    let kv_path = format!("{}/kv{}", wc.data_dir, proto_config.kv_ext);
+    let meta_path = format!("{}/meta{}", wc.data_dir, proto_config.meta_ext);
+
     let worker_config = WorkerConfig::new(
         &wc.worker_id,
         &wc.listen_addr,
         &wc.master_addr,
         &wc.data_dir,
     )
-    .with_kv_path(wc.kv_path().to_string_lossy())
-    .with_meta_path(wc.meta_path().to_string_lossy())
-    .with_cache_size(wc.cache_size)
-    .with_flush_interval(wc.flush_interval_ms)
-    .with_heartbeat_interval(wc.heartbeat_interval_secs)
-    .with_weight(wc.weight)
-    .with_quad_shard_config(config.quad_shard.clone());
+    .with_kv_path(&kv_path)
+    .with_meta_path(&meta_path)
+    .with_cache_size(proto_config.cache_size as usize)
+    .with_flush_interval(proto_config.flush_interval_ms)
+    .with_heartbeat_interval(proto_config.heartbeat_interval_secs)
+    .with_weight(proto_config.weight)
+    .with_quad_shard_config_option(quad_shard_config);
+
+    println!("   QuadKey 区域: {}", proto_config.region);
+    println!("   KV 扩展名: {}", proto_config.kv_ext);
+    println!("   Meta 扩展名: {}", proto_config.meta_ext);
 
     let node = WorkerNode::open(worker_config)?;
 
@@ -213,45 +269,10 @@ async fn run_worker(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>
         println!("   🌐 RESTful API: http://0.0.0.0:{}", http_port);
     }
 
-    // 注册到 Master
-    let master_addr_http = if wc.master_addr.starts_with("http") {
-        wc.master_addr.clone()
-    } else {
-        format!("http://{}", wc.master_addr)
-    };
-
-    println!("   注册到 Master: {}/{}", master_addr_http, wc.worker_id);
-    println!("   QuadKey 区域: {}", wc.region);
-    // 注册到 Master（带重试，应对 Master 启动延迟）
-    for retry in 0..10 {
-        match register_with_master(
-            &master_addr_http,
-            &wc.worker_id,
-            &wc.listen_addr,
-            &wc.region,
-        )
-        .await
-        {
-            Ok(_) => {
-                println!("   ✅ 注册成功");
-                break;
-            }
-            Err(e) => {
-                if retry < 9 {
-                    let delay = std::time::Duration::from_millis(1000 * (retry + 1) as u64);
-                    eprintln!("   ⚠️  注册失败 (重试 {}/10): {}", retry + 1, e);
-                    tokio::time::sleep(delay).await;
-                } else {
-                    eprintln!("   ❌ 注册最终失败: {}", e);
-                }
-            }
-        }
-    }
-
     // 启动心跳
     let hb_master_addr = master_addr_http.clone();
     let hb_worker_id = wc.worker_id.clone();
-    let hb_interval = wc.heartbeat_interval_secs;
+    let hb_interval = proto_config.heartbeat_interval_secs;
     let hb_node = node_arc.clone();
     // 启动单库模式的后台刷盘任务（分片模式由 ShardManager 内部启动）
     hb_node.start_flusher();
@@ -265,10 +286,34 @@ async fn run_worker(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>
     });
 
     // 初始化 Worker 日志采集器（使用持久 WebSocket 连接）
+    // 同时承载配置更新回调：Master 推送 config_update 时触发 WorkerNode 热更新
+    let logger_node = node_arc.clone();
     let worker_logger = std::sync::Arc::new(
-        WorkerLogger::new(&wc.worker_id, &wc.master_ws_addr)
+        WorkerLogger::new(&wc.worker_id, &master_ws_addr)
             .with_flush_interval(1000)
-            .with_max_buffer(500),
+            .with_max_buffer(500)
+            .with_config_update_handler(move |config_json| {
+                // 解析配置 JSON 并调用 WorkerNode 热更新接口
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&config_json) {
+                    let cache_size = v
+                        .get("cache_size")
+                        .and_then(|n| n.as_u64())
+                        .map(|n| n as usize);
+                    let flush_interval_ms = v
+                        .get("flush_interval_ms")
+                        .and_then(|n| n.as_u64());
+                    let heartbeat_interval_secs = v
+                        .get("heartbeat_interval_secs")
+                        .and_then(|n| n.as_u64());
+                    let weight = v.get("weight").and_then(|n| n.as_i64()).map(|n| n as i32);
+                    logger_node.update_performance_config(
+                        cache_size,
+                        flush_interval_ms,
+                        heartbeat_interval_secs,
+                        weight,
+                    );
+                }
+            }),
     );
 
     // 启动后台持久 WebSocket 连接
@@ -294,9 +339,7 @@ async fn run_worker(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>
         LogCategory::SystemHealth,
         &format!(
             "Worker '{}' 启动成功, KV: {}, Meta: {}",
-            wc.worker_id,
-            wc.kv_path().display(),
-            wc.meta_path().display()
+            wc.worker_id, kv_path, meta_path
         ),
     );
 
@@ -304,10 +347,10 @@ async fn run_worker(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>
     let addr: std::net::SocketAddr = wc.listen_addr.parse()?;
 
     println!("🚀 Worker 节点 '{}' 启动在 http://{}", wc.worker_id, addr);
-    println!("   KV 数据库: {}", wc.kv_path().display());
-    println!("   Meta 数据库: {}", wc.meta_path().display());
+    println!("   KV 数据库: {}", kv_path);
+    println!("   Meta 数据库: {}", meta_path);
     println!("   心跳间隔: {}s", hb_interval);
-    println!("   日志推送: ws://{}", wc.master_ws_addr);
+    println!("   日志推送: ws://{}", master_ws_addr);
 
     Server::builder()
         .add_service(
@@ -382,13 +425,25 @@ async fn run_standalone(config: &AppConfig) -> Result<(), Box<dyn std::error::Er
     Ok(())
 }
 
+/// 从 master_addr 推导 master_ws_addr（同主机 + :50053）
+///
+/// 例: "http://127.0.0.1:50051" -> "127.0.0.1:50053"
+fn derive_master_ws_addr(master_addr: &str) -> String {
+    let host = master_addr
+        .trim_start_matches("http://")
+        .trim_start_matches("https://")
+        .split(':')
+        .next()
+        .unwrap_or("127.0.0.1");
+    format!("{}:50053", host)
+}
+
 /// 注册 Worker 到 Master
 async fn register_with_master(
     master_addr: &str,
     worker_id: &str,
     listen_addr: &str,
-    region: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<store_system::grpc::proto::WorkerConfig, Box<dyn std::error::Error>> {
     use store_system::grpc::proto::master_service_client::MasterServiceClient;
 
     let endpoint = tonic::transport::Endpoint::from_shared(master_addr.to_string())?
@@ -402,11 +457,16 @@ async fn register_with_master(
         address: listen_addr.to_string(),
         weight: 1,
         tags: std::collections::HashMap::new(),
-        region: region.to_string(),
+        region: String::new(), // region 由 Master 根据 worker_regions 分配
     });
 
-    client.register_worker(request).await?;
-    Ok(())
+    let response = client.register_worker(request).await?.into_inner();
+    if !response.success {
+        return Err(format!("Master 拒绝注册: {}", response.message).into());
+    }
+    response
+        .config
+        .ok_or_else(|| "Master 未返回 WorkerConfig".into())
 }
 
 /// 发送心跳到 Master（携带系统健康信息）

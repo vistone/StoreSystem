@@ -33,6 +33,14 @@ pub struct AppConfig {
     /// QuadKey 分片配置
     #[serde(default)]
     pub quad_shard: QuadShardConfig,
+
+    /// Worker 默认配置（Master 持有，注册时下发给 Worker）
+    #[serde(default)]
+    pub worker_defaults: WorkerDefaultsConfig,
+
+    /// Worker 区域分配映射（worker_id → region），由 Master 统一管理
+    #[serde(default)]
+    pub worker_regions: std::collections::HashMap<String, String>,
 }
 
 fn default_mode() -> String {
@@ -151,6 +159,56 @@ impl Default for MasterConfig {
             meta_ext: default_meta_ext(),
             cache_size: default_cache_size(),
             flush_interval_ms: default_flush_interval(),
+        }
+    }
+}
+
+// ============================================================
+// Worker 默认配置（Master 下发给所有 Worker）
+// ============================================================
+
+/// Worker 默认配置（Master 持有，注册时下发给 Worker）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerDefaultsConfig {
+    /// KV 数据库文件扩展名
+    #[serde(default = "default_kv_ext")]
+    pub kv_ext: String,
+
+    /// Meta 数据库文件扩展名
+    #[serde(default = "default_meta_ext")]
+    pub meta_ext: String,
+
+    /// 缓存大小
+    #[serde(default = "default_cache_size")]
+    pub cache_size: usize,
+
+    /// 刷盘间隔（毫秒）
+    #[serde(default = "default_flush_interval")]
+    pub flush_interval_ms: u64,
+
+    /// 心跳间隔（秒）
+    #[serde(default = "default_heartbeat_interval")]
+    pub heartbeat_interval_secs: u64,
+
+    /// Worker 权重
+    #[serde(default = "default_weight")]
+    pub weight: i32,
+
+    /// QuadKey 分片配置
+    #[serde(default)]
+    pub quad_shard: QuadShardConfig,
+}
+
+impl Default for WorkerDefaultsConfig {
+    fn default() -> Self {
+        Self {
+            kv_ext: default_kv_ext(),
+            meta_ext: default_meta_ext(),
+            cache_size: default_cache_size(),
+            flush_interval_ms: default_flush_interval(),
+            heartbeat_interval_secs: default_heartbeat_interval(),
+            weight: default_weight(),
+            quad_shard: QuadShardConfig::default(),
         }
     }
 }
@@ -531,6 +589,67 @@ impl Default for AppConfig {
             standalone: StandaloneConfig::default(),
             shard: ShardConfig::default(),
             quad_shard: QuadShardConfig::default(),
+            worker_defaults: WorkerDefaultsConfig::default(),
+            worker_regions: std::collections::HashMap::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_worker_defaults_deserialize() {
+        let yaml = r#"
+worker_defaults:
+  kv_ext: ".g3db"
+  meta_ext: ".bulk"
+  cache_size: 10000
+  flush_interval_ms: 5
+  heartbeat_interval_secs: 10
+  weight: 1
+  quad_shard:
+    base_level: 8
+    split_level: 18
+    data_dir: "quad_data"
+    kv_ext: ".kv"
+    meta_ext: ".db"
+    cache_size: 10000
+    flush_interval_ms: 5
+"#;
+        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.worker_defaults.kv_ext, ".g3db");
+        assert_eq!(config.worker_defaults.meta_ext, ".bulk");
+        assert_eq!(config.worker_defaults.cache_size, 10000);
+        assert_eq!(config.worker_defaults.quad_shard.base_level, 8);
+        assert_eq!(config.worker_defaults.quad_shard.split_level, 18);
+        assert_eq!(config.worker_defaults.quad_shard.kv_ext, ".kv");
+    }
+
+    #[test]
+    fn test_worker_regions_deserialize() {
+        let yaml = r#"
+worker_regions:
+  worker-0: "0"
+  worker-1: "1"
+  worker-2: "2"
+  worker-3: "3"
+"#;
+        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.worker_regions.get("worker-0"), Some(&"0".to_string()));
+        assert_eq!(config.worker_regions.get("worker-1"), Some(&"1".to_string()));
+        assert_eq!(config.worker_regions.get("worker-3"), Some(&"3".to_string()));
+    }
+
+    #[test]
+    fn test_worker_defaults_default_values() {
+        let wd = WorkerDefaultsConfig::default();
+        assert_eq!(wd.kv_ext, ".db");
+        assert_eq!(wd.cache_size, 10000);
+        assert_eq!(wd.flush_interval_ms, 5);
+        assert_eq!(wd.heartbeat_interval_secs, 10);
+        assert_eq!(wd.weight, 1);
+        assert_eq!(wd.quad_shard.base_level, 8);
     }
 }

@@ -1,7 +1,13 @@
 # ============================================================
-# Master 节点配置文件
+# Master 节点配置文件（配置统一管理中心）
 # 部署到 Master 机器上使用
 # 启动: ./store_system --config master.yaml
+#
+# 本文件是整个分布式系统的配置唯一真源：
+# - Master 自身配置（master 段）
+# - 全局配置（global 段）
+# - Worker 默认配置（worker_defaults 段，注册时下发给 Worker）
+# - Worker 区域分配（worker_regions 段，worker_id → region 映射）
 # ============================================================
 
 # ---------- 运行模式 ----------
@@ -25,10 +31,45 @@ master:
   heartbeat_timeout_secs: 30
   # 清理宕机 Worker 的间隔（秒）
   cleanup_interval_secs: 60
-  # ---------- 统一存储配置（Master 统一定义，下发给所有 Worker） ----------
-  # 数据库文件名由 quad_shard.kv_name_template 模板决定（如 "kv_{}"），
-  # 此处只定义扩展名和性能参数
+
+# ---------- Worker 默认配置（Master 持有，注册时下发给 Worker） ----------
+# Worker 启动时仅需 worker_id、listen_addr、master_addr、data_dir，
+# 其余配置（扩展名、性能参数、quad_shard 等）均由此段下发。
+worker_defaults:
+  # KV 数据库文件扩展名
   kv_ext: ".g3db"
+  # Meta 数据库文件扩展名
   meta_ext: ".bulk"
+  # 缓存大小（每个分片的缓存条目数）
   cache_size: 10000
+  # 刷盘间隔（毫秒）
   flush_interval_ms: 5
+  # 心跳间隔（秒）
+  heartbeat_interval_secs: 10
+  # Worker 权重（用于负载均衡）
+  weight: 1
+  # QuadKey 分片配置（下发给 Worker）
+  quad_shard:
+    # 层级 ≤ base_level 时，所有数据存入 base DB
+    base_level: 8
+    # 层级阈值：base < level < split_level 用 4 位前缀，≥ split_level 用 8 位
+    split_level: 18
+    # 数据根目录（epoch 版本号将作为子目录名，由客户端传入）
+    data_dir: "quad_data"
+    # KV 数据库扩展名
+    kv_ext: ".kv"
+    # Meta 数据库扩展名
+    meta_ext: ".db"
+    # 缓存大小（每个分片）
+    cache_size: 10000
+    # 刷盘间隔（毫秒）
+    flush_interval_ms: 5
+
+# ---------- Worker 区域分配（worker_id → region 映射） ----------
+# Master 根据 worker_id 在此映射中查找 region，找不到则拒绝注册。
+# region 是 QuadKey 区域编号（0/1/2/3），由 Master 统一分配。
+worker_regions:
+  worker-0: "0"
+  worker-1: "1"
+  worker-2: "2"
+  worker-3: "3"

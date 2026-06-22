@@ -142,6 +142,48 @@ message RegisterWorkerRequest {
 message RegisterWorkerResponse {
   bool success = 1;
   string message = 2;
+  // Master 下发的完整 Worker 配置
+  WorkerConfig config = 3;
+  // 配置版本号（每次变更递增）
+  uint64 config_version = 4;
+}
+
+// Master 下发给 Worker 的运行配置
+message WorkerConfig {
+  // Worker 负责的 quadkey 区域
+  string region = 1;
+  // KV 数据库文件扩展名
+  string kv_ext = 2;
+  // Meta 数据库文件扩展名
+  string meta_ext = 3;
+  // 缓存大小
+  uint64 cache_size = 4;
+  // 刷盘间隔（毫秒）
+  uint64 flush_interval_ms = 5;
+  // 心跳间隔（秒）
+  uint64 heartbeat_interval_secs = 6;
+  // Worker 权重
+  int32 weight = 7;
+  // QuadKey 分片配置
+  QuadShardConfig quad_shard = 8;
+}
+
+// QuadKey 分片配置（Master 下发）
+message QuadShardConfig {
+  // 层级 ≤ base_level 时，所有数据存入 base DB
+  uint32 base_level = 1;
+  // 层级阈值：base < level < split_level 用 4 位前缀，≥ split_level 用 8 位
+  uint32 split_level = 2;
+  // 数据根目录
+  string data_dir = 3;
+  // KV 数据库扩展名
+  string kv_ext = 4;
+  // Meta 数据库扩展名
+  string meta_ext = 5;
+  // 缓存大小
+  uint64 cache_size = 6;
+  // 刷盘间隔（毫秒）
+  uint64 flush_interval_ms = 7;
 }
 
 // Worker 心跳

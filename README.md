@@ -31,10 +31,11 @@
 StoreSystem/
 ├── Cargo.toml              # 服务器端依赖配置
 ├── build.rs                # protobuf 编译脚本
-├── config.yaml             # 通用配置文件
-├── master.yaml             # Master 节点配置
-├── worker.yaml             # Worker-1 节点配置
-├── worker2.yaml            # Worker-2 节点配置
+├── master.yaml             # Master 节点配置（配置统一管理中心）
+├── worker-0.yaml           # Worker-0 极简启动配置
+├── worker-1.yaml           # Worker-1 极简启动配置
+├── worker-2.yaml           # Worker-2 极简启动配置
+├── worker-3.yaml           # Worker-3 极简启动配置
 ├── proto/
 │   └── store.proto         # gRPC 服务定义 (3 个 service)
 ├── src/
@@ -92,7 +93,8 @@ cargo build --release
 ### 单机模式启动
 
 ```bash
-./target/release/store_system --config config.yaml standalone
+# 单机模式使用 master.yaml（standalone 段使用默认值）
+./target/release/store_system --config master.yaml standalone
 ```
 
 - gRPC 服务：`http://0.0.0.0:50051`
@@ -324,46 +326,105 @@ RESTful 并发写入 (10MB x 5并发)                        10      309.105    
 
 ## 配置说明
 
-所有配置项通过 YAML 文件管理，无需修改程序代码。
+本系统采用 **Master 统一配置管理** 架构：Master 是配置唯一真源，Worker 启动时仅需最小启动信息（worker_id、listen_addr、master_addr、data_dir），其余配置由 Master 在注册时下发。
+
+### 配置架构
+
+```
+┌─────────────────────────────────────────────────┐
+│  master.yaml（配置唯一真源）                     │
+│  ├── master:       Master 自身配置               │
+│  ├── global:       全局配置                      │
+│  ├── worker_defaults: Worker 默认配置（下发）     │
+│  └── worker_regions:  worker_id → region 映射    │
+└─────────────────────────────────────────────────┘
+                      │ gRPC RegisterWorker
+                      ▼
+┌─────────────────────────────────────────────────┐
+│  Worker（注册时获取配置）                         │
+│  worker-*.yaml 仅含: worker_id, listen_addr,    │
+│                      master_addr, data_dir       │
+└─────────────────────────────────────────────────┘
+```
 
 ### 运行模式
 
 ```yaml
-# config.yaml
+# master.yaml
 mode: master          # master | worker | standalone
 ```
 
-### Master 配置
+### Master 配置（master.yaml）
 
 ```yaml
+mode: master
+global:
+  max_message_size: 268435456      # 256MB
+  protocol: "both"                 # grpc | restful | ws | both
+
 master:
   listen_addr: "0.0.0.0:50051"
   meta_path: "master_data/master.db"
   heartbeat_timeout_secs: 30       # Worker 心跳超时
   cleanup_interval_secs: 60        # 宕机 Worker 清理间隔
+
+# Worker 默认配置（Master 持有，注册时下发给 Worker）
+worker_defaults:
+  kv_ext: ".g3db"
+  meta_ext: ".bulk"
+  cache_size: 10000
+  flush_interval_ms: 5
+  heartbeat_interval_secs: 10
+  weight: 1
+  quad_shard:
+    base_level: 8
+    split_level: 18
+    data_dir: "quad_data"
+    kv_ext: ".kv"
+    meta_ext: ".db"
+    cache_size: 10000
+    flush_interval_ms: 5
+
+# Worker 区域分配（worker_id → region，由 Master 统一管理）
+# Master 根据 worker_id 在此映射中查找 region，找不到则拒绝注册
+worker_regions:
+  worker-0: "0"
+  worker-1: "1"
+  worker-2: "2"
+  worker-3: "3"
 ```
 
-### Worker 配置
+### Worker 配置（worker-*.yaml，极简）
 
 ```yaml
-worker:
-  worker_id: "worker-1"
-  listen_addr: "0.0.0.0:50061"
-  master_addr: "http://127.0.0.1:50051"
-  data_dir: "worker_data/worker-1"
-  cache_size: 10000                # LRU 缓存容量
-  flush_interval_ms: 5             # 刷盘间隔
-  heartbeat_interval_secs: 10      # 心跳间隔
-  weight: 1                        # 负载均衡权重
-```
-
-### gRPC 消息大小
-
-```yaml
+mode: worker
 global:
-  max_message_size: 268435456      # 256MB
-  protocol: "both"                 # grpc | restful | ws | both
+  max_message_size: 268435456
+  protocol: "both"
+worker:
+  worker_id: "worker-0"            # 唯一标识
+  listen_addr: "0.0.0.0:50061"     # gRPC 监听地址
+  master_addr: "http://127.0.0.1:50051"  # Master 地址
+  data_dir: "worker_data/worker-0" # 数据目录
+  # 其余配置（kv_ext, meta_ext, cache_size, flush_interval_ms,
+  # heartbeat_interval_secs, weight, quad_shard, region）
+  # 均由 Master 注册时下发
 ```
+
+### 配置热更新
+
+Master 通过日志 WebSocket 连接的反向通道推送配置更新：
+
+| 参数类型 | 可热更新 | 说明 |
+|---------|:-------:|------|
+| `cache_size` | ⚠️ 记录 | 仅记录新值，KvStore 容量需重启生效 |
+| `flush_interval_ms` | ⚠️ 记录 | 仅记录新值，下次 flusher 启动生效 |
+| `heartbeat_interval_secs` | ⚠️ 记录 | 仅记录新值，下次心跳周期生效 |
+| `weight` | ⚠️ 记录 | 仅记录新值 |
+| `data_dir` / `kv_path` / `meta_path` | ❌ | 路径类参数需重启生效 |
+| `kv_ext` / `meta_ext` | ❌ | 扩展名需重启生效 |
+
+**配置版本控制**：Master 维护单调递增的 `config_version`，每次配置变更递增，确保 Worker 能识别配置更新。
 
 ## 数据持久化
 
