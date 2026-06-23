@@ -1,8 +1,8 @@
 # Store System
 
-**版本**: 0.1.7
+**版本**: 0.1.8
 
-一个高性能的嵌入式键值存储系统，基于 bbolt (jammdb) + SQLite 双存储引擎，提供 gRPC 和 RESTful 双接口，支持写合并优化、WAL 原子写入、副本故障转移和大 Value（最大 100MB）读写。
+一个高性能的嵌入式键值存储系统，基于 bbolt (jammdb) + SQLite 双存储引擎，提供 gRPC 和 RESTful 双接口，支持写合并优化、WAL 原子写入、副本故障转移、进程守护自愈和大 Value（最大 100MB）读写。
 
 ## 特性
 
@@ -11,6 +11,8 @@
 - **写合并优化**：put 先入内存缓冲，后台批量 fsync，写入延迟 < 1ms
 - **WAL 原子写入**：Write-Ahead Log 三步协议 (WAL→KV→Meta)，崩溃恢复零数据丢失
 - **副本故障转移**：Rendezvous Hashing 路由 + 同步写主副本 + 异步写备副本，Worker 宕机自动 fallback
+- **Master Pending 缓存**：区域 Worker 宕机时 Master 本地持久化接盘，Worker 恢复后自动写回
+- **进程守护自愈**：store_guardian 独立进程，深度探针检测假死，指数退避自动重启
 - **大 Value 支持**：gRPC 消息上限 256MB，实测支持 100MB 单条读写
 - **LRU 读缓存**：moka 自动淘汰，无需手动管理容量
 - **批量事务**：元数据批量写入用真正的单事务提交 (put_batch_txn)
@@ -69,6 +71,18 @@ StoreSystem/
 │       │   └── fault_test.rs # 副本故障恢复测试
 │       ├── grpc_client.rs  # gRPC 客户端
 │       └── restful_client.rs # RESTful 客户端
+├── guardian/               # 进程守护者（独立项目）
+│   ├── Cargo.toml
+│   ├── build.rs
+│   ├── proto/
+│   │   └── store.proto
+│   └── src/
+│       ├── main.rs         # CLI 入口 + 监控循环
+│       ├── config.rs       # GuardianConfig 配置解析
+│       ├── process.rs      # 进程状态机 + spawn/kill
+│       ├── prober.rs       # 深度探针（gRPC Put+Get）
+│       └── policy.rs       # 重启退避+冷却策略
+├── guardian.yaml            # 进程守护者配置
 └── admin-ui/               # Next.js 管理界面 (端口 3000)
 ```
 
@@ -82,12 +96,13 @@ StoreSystem/
 ### 编译
 
 ```bash
-# 编译服务器
-cargo build --release
+# 编译全部（server + client + guardian）
+make build
 
-# 编译客户端
-cd client
-cargo build --release
+# 或单独编译
+cargo build --release                    # server
+cargo build --release -p store_client    # client
+cargo build --release -p store_guardian  # guardian
 ```
 
 ### 单机模式启动
@@ -123,6 +138,25 @@ cargo build --release
 | Worker-1 | 1 | 50062 | 52062 | quadkey 1xxx |
 | Worker-2 | 2 | 50063 | 52063 | quadkey 2xxx |
 | Worker-3 | 3 | 50064 | 52064 | quadkey 3xxx |
+
+### 进程守护启动（自动拉起 + 假死检测）
+
+```bash
+# 通过 store_guardian 启动并守护全部进程
+./target/release/store_guardian --config guardian.yaml
+
+# 仅守护 Master
+./target/release/store_guardian --config guardian.yaml --role master
+
+# 仅守护 Worker
+./target/release/store_guardian --config guardian.yaml --role worker
+```
+
+守护进程会自动：
+- 按 `depends_on` 顺序启动所有进程
+- 每 5s 执行深度探针（gRPC Put+Get 往返）
+- 连续 3 次探针失败 → kill -9 + 重启（指数退避 1s→2s→4s→...→60s）
+- 连续 10 次重启失败 → 进入冷却 300s，防止重启风暴
 
 ### 运行性能测试
 
@@ -276,7 +310,7 @@ Worker-1 (主副本)                    Worker-2 (备副本)
 | 9-17 | quadkey[..4] | `{dir}/{type}/12/3021.kv` |
 | ≥ 18 | quadkey[..8] | `{dir}/{type}/20/30211234.kv` |
 
-## v0.1.7 性能指标
+## v0.1.8 性能指标
 
 ### 测试环境
 
@@ -443,20 +477,22 @@ Master 通过日志 WebSocket 连接的反向通道推送配置更新：
 ### 运行测试
 
 ```bash
-# 性能测试
-cargo run --release  # 启动服务
-cd client && cargo run --release  # 运行客户端
+# 全量单元测试
+cargo test                    # server + library (37 tests)
+cargo test -p store_guardian  # guardian (8 tests)
+cargo test --all              # 全部 (45 tests)
 
-# 故障恢复测试
-cd client
-cargo build --release --bin fault_test
-../target/release/fault_test
+# 集成测试
+make test       # 启动集群 + 性能测试
+make test-fault # 启动集群 + 故障恢复测试
 ```
 
 ### 清理数据
 
 ```bash
-rm -rf data/ master_data/ worker_data/
+make clean-data   # 清理测试数据
+make clean        # 清理二进制
+make clean-all    # 深度清理
 ```
 
 ## 依赖说明

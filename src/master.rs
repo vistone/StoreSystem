@@ -4,6 +4,7 @@ use crate::master_http::WorkerHttpClient;
 use crate::master_store::MasterStore;
 use crate::master_ws::WorkerWsClient;
 use crate::meta::ObjectMeta;
+use crate::pending_store::PendingStore;
 use bytes::Bytes;
 use chrono::Utc;
 use dashmap::DashMap;
@@ -80,6 +81,12 @@ pub struct MasterConfig {
     pub heartbeat_timeout_secs: u64,
     /// 清理宕机 Worker 的间隔（秒）
     pub cleanup_interval_secs: u64,
+    /// Pending 缓存数据目录
+    pub pending_data_dir: String,
+    /// Pending 惰性 GC 间隔（秒）
+    pub pending_gc_interval_secs: u64,
+    /// Pending flushing 超时（秒）
+    pub pending_flush_timeout_secs: u64,
 }
 
 impl Default for MasterConfig {
@@ -89,6 +96,9 @@ impl Default for MasterConfig {
             meta_path: "master_data/master.db".to_string(),
             heartbeat_timeout_secs: 30,
             cleanup_interval_secs: 60,
+            pending_data_dir: "master_data/pending".to_string(),
+            pending_gc_interval_secs: 60,
+            pending_flush_timeout_secs: 60,
         }
     }
 }
@@ -119,6 +129,8 @@ pub struct MasterNode {
     worker_regions: Arc<HashMap<String, String>>,
     /// 配置版本号（每次变更递增，初始为 1）
     config_version: Arc<std::sync::atomic::AtomicU64>,
+    /// Pending 缓存（区域 Worker 宕机时 Master 本地兜底）
+    pub pending_store: Arc<PendingStore>,
 }
 
 /// Master 下发给 Worker 的配置载体
@@ -207,6 +219,8 @@ impl MasterNode {
 
         println!("[Master] 已加载 {} 个 Worker 注册信息", workers_map.len());
 
+        let pending_store = Arc::new(PendingStore::open(&config.pending_data_dir)?);
+
         Ok(Self {
             config,
             protocol: protocol.to_string(),
@@ -218,6 +232,7 @@ impl MasterNode {
             worker_defaults: Arc::new(crate::config::WorkerDefaultsConfig::default()),
             worker_regions: Arc::new(HashMap::new()),
             config_version: Arc::new(std::sync::atomic::AtomicU64::new(1)),
+            pending_store,
         })
     }
 
@@ -1081,6 +1096,15 @@ pub struct MasterStoreService {
     master: Arc<MasterNode>,
 }
 
+/// 从 quadkey 提取区域编号（首字符）
+fn quadkey_region(quadkey: &str) -> &str {
+    if quadkey.is_empty() {
+        "0"
+    } else {
+        &quadkey[0..1]
+    }
+}
+
 impl MasterStoreService {
     pub fn new(master: MasterNode) -> Self {
         Self {
@@ -1093,70 +1117,90 @@ impl MasterStoreService {
     }
 
     /// 通过 quadkey 路由到区域 Worker 并发起 put 请求
+    /// 如果区域 Worker 不可用，降级写入 Master 本地 PendingStore
     async fn put_via_quadkey(
         &self,
         req: proto::PutRequest,
     ) -> std::result::Result<Response<proto::PutResponse>, Status> {
-        let worker = self
-            .master
-            .route_by_quadkey(&req.quadkey)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
+        let region = quadkey_region(&req.quadkey);
 
-        let mut client = self
-            .master
-            .get_worker_client(&worker.address)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
+        // 1. 尝试直写区域 Worker
+        match self.master.route_by_quadkey(&req.quadkey).await {
+            Ok(worker) => {
+                let mut client = self
+                    .master
+                    .get_worker_client(&worker.address)
+                    .await
+                    .map_err(|e| Status::internal(e.to_string()))?;
 
-        let request = tonic::Request::new(proto::PutRequest {
-            key: req.key,
-            value: req.value,
-            content_type: req.content_type,
-            tags: req.tags,
-            quadkey: req.quadkey,
-            level: req.level,
-            epoch: req.epoch,
-        });
+                let request = tonic::Request::new(proto::PutRequest {
+                    key: req.key.clone(),
+                    value: req.value.clone(),
+                    content_type: req.content_type.clone(),
+                    tags: req.tags.clone(),
+                    quadkey: req.quadkey.clone(),
+                    level: req.level,
+                    epoch: req.epoch,
+                });
 
-        let response = client
-            .put(request)
-            .await
-            .map_err(|e| Status::internal(format!("Worker put 失败: {}", e)))?;
+                match client.put(request).await {
+                    Ok(response) => return Ok(Response::new(response.into_inner())),
+                    Err(_) => {
+                        // Worker 连接失败，降级到 PendingStore
+                    }
+                }
+            }
+            Err(_) => {
+                // route_by_quadkey 失败（区域无存活 Worker），降级到 PendingStore
+            }
+        }
 
-        Ok(Response::new(response.into_inner()))
+        // 2. 降级: 写入 Master 本地 PendingStore
+        self.master
+            .pending_store
+            .put(region, &req.key, &req.value)
+            .map_err(|e| Status::internal(format!("PendingStore put 失败: {}", e)))?;
+
+        Ok(Response::new(proto::PutResponse { meta: None }))
     }
 
     /// 通过 quadkey 路由到区域 Worker 并发起 get 请求
+    /// 如果 Worker 不可达或 key 不存在，降级查询 Master 本地 PendingStore
     async fn get_via_quadkey(
         &self,
         req: proto::GetRequest,
     ) -> std::result::Result<Response<proto::GetResponse>, Status> {
-        let worker = self
+        let region = quadkey_region(&req.quadkey);
+
+        // 1. 尝试直读区域 Worker
+        if let Ok(worker) = self.master.route_by_quadkey(&req.quadkey).await {
+            if let Ok(mut client) = self.master.get_worker_client(&worker.address).await {
+                let request = tonic::Request::new(proto::GetRequest {
+                    key: req.key.clone(),
+                    quadkey: req.quadkey.clone(),
+                    level: req.level,
+                    epoch: req.epoch,
+                });
+                if let Ok(response) = client.get(request).await {
+                    return Ok(Response::new(response.into_inner()));
+                }
+            }
+        }
+
+        // 2. 降级: 查 Master 本地 PendingStore
+        let value = self
             .master
-            .route_by_quadkey(&req.quadkey)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
+            .pending_store
+            .get(region, &req.key)
+            .map_err(|e| Status::internal(format!("PendingStore get 失败: {}", e)))?;
 
-        let mut client = self
-            .master
-            .get_worker_client(&worker.address)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-
-        let request = tonic::Request::new(proto::GetRequest {
-            key: req.key,
-            quadkey: req.quadkey,
-            level: req.level,
-            epoch: req.epoch,
-        });
-
-        let response = client
-            .get(request)
-            .await
-            .map_err(|e| Status::internal(format!("Worker get 失败: {}", e)))?;
-
-        Ok(Response::new(response.into_inner()))
+        match value {
+            Some(v) => Ok(Response::new(proto::GetResponse {
+                value: v.to_vec(),
+                meta: None,
+            })),
+            None => Err(Status::not_found(format!("key not found: {}", req.key))),
+        }
     }
 
     /// 通过 quadkey 路由到区域 Worker 并发起 delete 请求

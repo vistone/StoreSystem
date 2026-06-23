@@ -1,4 +1,5 @@
 use crate::logger::{LogCategory, LogEntry, LogLevel, LogStore};
+use crate::pending_store::PendingStore;
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -21,15 +22,18 @@ use tokio_tungstenite::tungstenite::Message;
 pub struct MasterLogWsServer {
     store: Arc<LogStore>,
     port: u16,
+    /// Pending 缓存（用于 Worker 恢复时写回）
+    pending_store: Arc<PendingStore>,
     /// 配置推送器（共享给 Master 用于配置变更时下发）
     config_broadcaster: Arc<ConfigBroadcaster>,
 }
 
 impl MasterLogWsServer {
-    pub fn new(store: LogStore, port: u16) -> Self {
+    pub fn new(store: LogStore, port: u16, pending_store: Arc<PendingStore>) -> Self {
         Self {
             store: Arc::new(store),
             port,
+            pending_store,
             config_broadcaster: Arc::new(ConfigBroadcaster::new()),
         }
     }
@@ -54,15 +58,17 @@ impl MasterLogWsServer {
 
         let store = self.store.clone();
         let broadcaster = self.config_broadcaster.clone();
+        let pending_store = self.pending_store.clone();
 
         while let Ok((stream, peer)) = listener.accept().await {
             let store = store.clone();
             let broadcaster = broadcaster.clone();
+            let pending_store = pending_store.clone();
             tokio::spawn(async move {
                 match accept_async(stream).await {
                     Ok(ws_stream) => {
-                        println!("[Master Log WS] 新日志连接: {}", peer);
-                        handle_log_connection(ws_stream, store, broadcaster).await;
+                        println!("[Master Log WS] 新连接: {}", peer);
+                        handle_connection(ws_stream, store, broadcaster, pending_store).await;
                     }
                     Err(e) => {
                         eprintln!("[Master Log WS] 接受连接失败: {}", e);
@@ -73,15 +79,16 @@ impl MasterLogWsServer {
     }
 }
 
-/// 处理单个日志 WebSocket 连接
+/// 处理单个 WebSocket 连接
 ///
-/// 同时处理两个方向的流量：
-/// - 读：Worker 推送的日志消息（首条需为 register 消息以绑定 worker_id）
-/// - 写：Master 的日志 ACK + 配置更新推送（通过 mpsc 通道汇入）
-async fn handle_log_connection(
+/// 同时处理三个方向的流量：
+/// - 读：Worker 推送的日志消息 / pending_pull / pending_ack
+/// - 写：Master 的日志 ACK + 配置更新推送 + pending_entry 流
+async fn handle_connection(
     stream: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
     store: Arc<LogStore>,
     broadcaster: Arc<ConfigBroadcaster>,
+    pending_store: Arc<PendingStore>,
 ) {
     let (mut write, mut read) = stream.split();
 
@@ -95,23 +102,54 @@ async fn handle_log_connection(
             msg_result = read.next() => {
                 match msg_result {
                     Some(Ok(Message::Text(text))) => {
-                        // 首条消息若是 register，则绑定 worker_id
+                        // 解析 JSON 获取 action/type
+                        let v: serde_json::Value = match serde_json::from_str(&text) {
+                            Ok(v) => v,
+                            Err(_) => continue,
+                        };
+                        let msg_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                        let action = v.get("action").and_then(|a| a.as_str()).unwrap_or("");
+
+                        // === pending_pull: Worker 请求拉取 pending 数据 ===
+                        if msg_type == "pending_pull" {
+                            let worker_region = v.get("region").and_then(|r| r.as_str()).unwrap_or("0");
+                            handle_pending_pull(&mut write, &pending_store, worker_region).await;
+                            continue;
+                        }
+
+                        // === pending_ack: Worker 确认单条 pending 已写入 ===
+                        if msg_type == "pending_ack" {
+                            if let (Some(ack_key), Some(ack_status)) = (
+                                v.get("key").and_then(|k| k.as_str()),
+                                v.get("status").and_then(|s| s.as_str()),
+                            ) {
+                                let worker_region = v.get("region").and_then(|r| r.as_str()).unwrap_or("0");
+                                if ack_status == "ok" {
+                                    let _ = pending_store.mark_done(worker_region, ack_key);
+                                } else {
+                                    let _ = pending_store.revert_to_pending(worker_region, ack_key);
+                                }
+                            }
+                            continue;
+                        }
+
+                        // === register: 首条注册消息 ===
                         if worker_id_registered.is_none() {
-                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-                                if v.get("action").and_then(|a| a.as_str()) == Some("register") {
-                                    if let Some(wid) = v.get("worker_id").and_then(|w| w.as_str()) {
-                                        let wid = wid.to_string();
-                                        broadcaster.register(wid.clone(), config_tx.clone());
-                                        worker_id_registered = Some(wid);
-                                        let ack = r#"{"status":"ok","message":"registered"}"#;
-                                        if write.send(Message::Text(ack.to_string())).await.is_err() {
-                                            break;
-                                        }
-                                        continue;
+                            if action == "register" {
+                                if let Some(wid) = v.get("worker_id").and_then(|w| w.as_str()) {
+                                    let wid = wid.to_string();
+                                    broadcaster.register(wid.clone(), config_tx.clone());
+                                    worker_id_registered = Some(wid);
+                                    let ack = r#"{"status":"ok","message":"registered"}"#;
+                                    if write.send(Message::Text(ack.to_string())).await.is_err() {
+                                        break;
                                     }
+                                    continue;
                                 }
                             }
                         }
+
+                        // === 日志消息（默认） ===
                         let response = process_log_message(&text, &store).await;
                         let response_text = serde_json::to_string(&response).unwrap_or_default();
                         if write.send(Message::Text(response_text)).await.is_err() {
@@ -155,6 +193,62 @@ async fn handle_log_connection(
     if let Some(wid) = worker_id_registered {
         broadcaster.unregister(&wid);
     }
+}
+
+/// 处理 pending_pull 请求：从 PendingStore 流式推送 pending 条目到 Worker
+async fn handle_pending_pull(
+    write: &mut futures_util::stream::SplitSink<
+        tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+        Message,
+    >,
+    pending_store: &PendingStore,
+    region: &str,
+) {
+    use base64::Engine;
+
+    let entries = match pending_store.list_by_status(region, &["pending", "flushing"]) {
+        Ok(e) => e,
+        Err(_) => {
+            let end = r#"{"type":"pending_end","total":0,"error":"list failed"}"#;
+            let _ = write.send(Message::Text(end.to_string())).await;
+            return;
+        }
+    };
+
+    let total = entries.len();
+    for (seq, entry) in entries.iter().enumerate() {
+        // 标记为 flushing
+        let _ = pending_store.mark_flushing(region, &entry.key);
+
+        // 读取 value
+        let value = match pending_store.get(region, &entry.key) {
+            Ok(Some(v)) => v,
+            _ => continue,
+        };
+
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&value);
+        let msg = serde_json::json!({
+            "type": "pending_entry",
+            "key": entry.key,
+            "value": b64,
+            "seq": seq + 1,
+        });
+
+        if write
+            .send(Message::Text(msg.to_string()))
+            .await
+            .is_err()
+        {
+            // 推送中断，已标记为 flushing 的条目会由 GC 超时回退
+            return;
+        }
+    }
+
+    let end = serde_json::json!({
+        "type": "pending_end",
+        "total": total,
+    });
+    let _ = write.send(Message::Text(end.to_string())).await;
 }
 
 /// 日志消息响应

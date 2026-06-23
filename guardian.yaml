@@ -1,0 +1,50 @@
+# StoreGuardian 进程守护者配置
+# 启动: ./bin/store_guardian --config guardian.yaml
+# 仅管理 Master: ./bin/store_guardian --config guardian.yaml --role master
+# 仅管理 Worker: ./bin/store_guardian --config guardian.yaml --role worker
+
+guardian:
+  # 探针间隔（秒）
+  probe_interval_secs: 5
+  # 探针超时（秒）
+  probe_timeout_secs: 3
+  # 连续失败 N 次判定假死
+  failure_threshold: 3
+  # 重启退避: 基数秒
+  backoff_base_secs: 1
+  # 重启退避: 最大秒
+  backoff_max_secs: 60
+  # 连续失败上限后冷却
+  cooldown_after_failures: 10
+  # 冷却秒数
+  cooldown_secs: 300
+
+processes:
+  master:
+    path: "./bin/store_system"
+    args: ["--config", "master.yaml"]
+    health_grpc: "127.0.0.1:50051"
+
+  worker-0:
+    path: "./bin/store_system"
+    args: ["--config", "worker-0.yaml"]
+    health_grpc: "127.0.0.1:50061"
+    depends_on: "master"
+
+  worker-1:
+    path: "./bin/store_system"
+    args: ["--config", "worker-1.yaml"]
+    health_grpc: "127.0.0.1:50062"
+    depends_on: "master"
+
+  worker-2:
+    path: "./bin/store_system"
+    args: ["--config", "worker-2.yaml"]
+    health_grpc: "127.0.0.1:50063"
+    depends_on: "master"
+
+  worker-3:
+    path: "./bin/store_system"
+    args: ["--config", "worker-3.yaml"]
+    health_grpc: "127.0.0.1:50064"
+    depends_on: "master"

@@ -1,9 +1,9 @@
-.PHONY: all build build-server build-client clean clean-data clean-all test test-fault
+.PHONY: all build build-server build-client build-guardian clean clean-data clean-all test test-fault
 
 all: build
 
-# 编译 server 和 client，并将可执行文件输出到 bin/ 目录
-build: build-server build-client
+# 编译 server、client 和 guardian，并将可执行文件输出到 bin/ 目录
+build: build-server build-client build-guardian
 
 build-server:
 	/home/stone/.cargo/bin/cargo build --release
@@ -15,6 +15,11 @@ build-client:
 	cp client/target/release/store_client bin/store_client
 	cp client/target/release/fault_test bin/fault_test
 	@echo "✅ client 已编译: bin/store_client, bin/fault_test"
+
+build-guardian:
+	/home/stone/.cargo/bin/cargo build --release -p store_guardian
+	cp target/release/store_guardian bin/store_guardian
+	@echo "✅ guardian 已编译: bin/store_guardian"
 
 # ============================================================
 # 测试（自动启动集群 + 运行测试 + 清理）
@@ -60,12 +65,12 @@ test-fault: build
 
 # 清理编译产物
 clean:
-	rm -rf bin/store_system bin/store_client bin/fault_test
+	rm -rf bin/store_system bin/store_client bin/fault_test bin/store_guardian
 	@echo "✅ bin/ 目录已清理"
 
 # 清理所有测试数据（数据库文件 + 临时日志）
 clean-data:
-	rm -rf master_data worker_data data shard_data
+	rm -rf master_data worker_data data shard_data quad_data data_sa
 	-pgrep -f "/bin/store_system" | xargs -r kill 2>/dev/null; true
 	@echo "✅ 测试数据已清理"
 

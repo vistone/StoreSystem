@@ -128,6 +128,10 @@ pub struct MasterConfig {
     /// 刷盘间隔（毫秒），统一下发给 Worker
     #[serde(default = "default_flush_interval")]
     pub flush_interval_ms: u64,
+
+    /// Pending 缓存配置（区域 Worker 宕机时 Master 本地兜底）
+    #[serde(default)]
+    pub pending: PendingConfig,
 }
 
 fn default_master_listen() -> String {
@@ -159,6 +163,48 @@ impl Default for MasterConfig {
             meta_ext: default_meta_ext(),
             cache_size: default_cache_size(),
             flush_interval_ms: default_flush_interval(),
+            pending: PendingConfig::default(),
+        }
+    }
+}
+
+// ============================================================
+// Pending 缓存配置
+// ============================================================
+
+/// Master 本地 Pending 缓存配置
+/// 当区域 Worker 不可用时，Master 接管写入并存入本地持久化缓存。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingConfig {
+    /// 数据目录（默认 master_data/pending）
+    #[serde(default = "default_pending_data_dir")]
+    pub data_dir: String,
+    /// 惰性 GC 间隔（秒），默认 60
+    #[serde(default = "default_pending_gc_interval")]
+    pub gc_interval_secs: u64,
+    /// flushing 超时（秒），超过后回退为 pending，默认 60
+    #[serde(default = "default_pending_flush_timeout")]
+    pub flush_timeout_secs: u64,
+}
+
+fn default_pending_data_dir() -> String {
+    "master_data/pending".to_string()
+}
+
+fn default_pending_gc_interval() -> u64 {
+    60
+}
+
+fn default_pending_flush_timeout() -> u64 {
+    60
+}
+
+impl Default for PendingConfig {
+    fn default() -> Self {
+        Self {
+            data_dir: default_pending_data_dir(),
+            gc_interval_secs: default_pending_gc_interval(),
+            flush_timeout_secs: default_pending_flush_timeout(),
         }
     }
 }

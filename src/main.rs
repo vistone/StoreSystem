@@ -74,6 +74,9 @@ async fn run_master(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>
             meta_path: mc.meta_path.clone(),
             heartbeat_timeout_secs: mc.heartbeat_timeout_secs,
             cleanup_interval_secs: mc.cleanup_interval_secs,
+            pending_data_dir: mc.pending.data_dir.clone(),
+            pending_gc_interval_secs: mc.pending.gc_interval_secs,
+            pending_flush_timeout_secs: mc.pending.flush_timeout_secs,
         },
         &gc.protocol,
         config.worker_defaults.clone(),
@@ -87,13 +90,27 @@ async fn run_master(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>
     let log_store = Arc::new(log_store);
     println!("📋 日志数据库: {}", log_store_path);
 
-    // 启动后台清理任务
+    // 启动后台清理任务（宕机 Worker 检测）
     let cleanup_master = master.clone();
     let cleanup_interval = Duration::from_secs(mc.cleanup_interval_secs);
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(cleanup_interval).await;
             cleanup_master.cleanup_dead_workers().await;
+        }
+    });
+
+    // 启动后台 Pending GC 任务
+    let pending_master = master.clone();
+    let pending_gc_interval = Duration::from_secs(mc.pending.gc_interval_secs);
+    let pending_flush_timeout = mc.pending.flush_timeout_secs;
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(pending_gc_interval).await;
+            for region in &["0", "1", "2", "3"] {
+                let _ = pending_master.pending_store.revert_stale_flushing(region, pending_flush_timeout);
+                let _ = pending_master.pending_store.gc_done(region, pending_flush_timeout);
+            }
         }
     });
 
@@ -140,9 +157,13 @@ async fn run_master(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>
         start_admin_api(admin_ctx, admin_port).await;
     };
 
-    // 日志 WebSocket 服务（接收 Worker 推送的日志）
+    // 日志 WebSocket 服务（接收 Worker 推送的日志 + pending 协议）
     let log_ws_port = 50053;
-    let log_ws_server = MasterLogWsServer::new(log_store.as_ref().clone(), log_ws_port);
+    let log_ws_server = MasterLogWsServer::new(
+        log_store.as_ref().clone(),
+        log_ws_port,
+        master.pending_store.clone(),
+    );
     let log_ws_server = async {
         log_ws_server.start().await;
     };
@@ -237,6 +258,29 @@ async fn run_worker(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>
 
     // 使用 Arc 共享 WorkerNode 实例，避免重复打开数据库文件
     let node_arc = Arc::new(node);
+
+    // === 从 Master 拉取 pending 数据（region 恢复后写回） ===
+    let pending_region = proto_config.region.clone();
+    let pending_node = node_arc.clone();
+    let pending_ws = master_ws_addr.clone();
+    let pending_count = tokio::spawn(async move {
+        match pull_pending_from_master(&pending_ws, &pending_region, &pending_node).await {
+            Ok(n) => {
+                if n > 0 {
+                    println!("   📥 从 Master 拉取了 {} 条 pending 数据", n);
+                }
+                n
+            }
+            Err(e) => {
+                eprintln!("   ⚠️  拉取 pending 数据失败: {}", e);
+                0
+            }
+        }
+    })
+    .await
+    .unwrap_or(0);
+    let _ = pending_count;
+
     let worker_service = WorkerService::new_arc(node_arc.clone());
 
     // 根据协议启动对应的服务
@@ -364,6 +408,106 @@ async fn run_worker(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>
         .await?;
 
     Ok(())
+}
+
+/// 从 Master 拉取本 region 的 pending 数据并写入本地
+///
+/// 在 Worker 启动注册成功后调用，通过 WebSocket 接收 pending_entry 流。
+async fn pull_pending_from_master(
+    master_ws_addr: &str,
+    region: &str,
+    node: &Arc<WorkerNode>,
+) -> Result<usize, Box<dyn std::error::Error>> {
+    use base64::Engine;
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::connect_async;
+
+    let ws_url = format!("ws://{}", master_ws_addr);
+    let (ws_stream, _) = connect_async(&ws_url).await?;
+    let (mut write, mut read) = ws_stream.split();
+
+    // 发送 pending_pull 请求
+    let pull_msg = serde_json::json!({
+        "type": "pending_pull",
+        "region": region,
+    });
+    write
+        .send(tokio_tungstenite::tungstenite::Message::Text(
+            pull_msg.to_string(),
+        ))
+        .await?;
+
+    let mut count = 0usize;
+
+    // 接收 pending_entry 流
+    while let Some(msg) = read.next().await {
+        let msg = msg?;
+        if let tokio_tungstenite::tungstenite::Message::Text(text) = msg {
+            let v: serde_json::Value = match serde_json::from_str(&text) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let msg_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+
+            match msg_type {
+                "pending_entry" => {
+                    let key = v.get("key").and_then(|k| k.as_str()).unwrap_or("");
+                    let b64 = v.get("value").and_then(|v| v.as_str()).unwrap_or("");
+                    let value = base64::engine::general_purpose::STANDARD.decode(b64)?;
+
+                    // 写入 Worker 本地存储（使用 put_object，走 WAL 三步协议）
+                    let now = chrono::Utc::now();
+                    let meta = store_system::ObjectMeta {
+                        key: key.to_string(),
+                        size: value.len() as u64,
+                        created_at: now,
+                        updated_at: now,
+                        content_type: None,
+                        tags: None,
+                        checksum: None,
+                        storage_node: None,
+                    };
+                    match node.put_object(key, bytes::Bytes::from(value), meta) {
+                        Ok(()) => {
+                            // 发送 ack
+                            let ack = serde_json::json!({
+                                "type": "pending_ack",
+                                "key": key,
+                                "region": region,
+                                "status": "ok",
+                            });
+                            let _ = write
+                                .send(tokio_tungstenite::tungstenite::Message::Text(
+                                    ack.to_string(),
+                                ))
+                                .await;
+                            count += 1;
+                        }
+                        Err(e) => {
+                            let ack = serde_json::json!({
+                                "type": "pending_ack",
+                                "key": key,
+                                "region": region,
+                                "status": "fail",
+                                "error": e.to_string(),
+                            });
+                            let _ = write
+                                .send(tokio_tungstenite::tungstenite::Message::Text(
+                                    ack.to_string(),
+                                ))
+                                .await;
+                        }
+                    }
+                }
+                "pending_end" => {
+                    break;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    Ok(count)
 }
 
 /// 启动单机模式（向后兼容）

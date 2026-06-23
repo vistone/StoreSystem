@@ -11,6 +11,8 @@ pub mod master_http;
 pub mod master_log_ws;
 pub mod master_store;
 pub mod master_ws;
+pub mod pending_store;
+pub use pending_store::{PendingEntry, PendingStore};
 pub mod meta;
 pub mod quad_shard;
 pub mod shard;
