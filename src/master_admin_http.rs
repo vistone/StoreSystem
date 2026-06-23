@@ -1,6 +1,8 @@
 use crate::logger::{LogCategory, LogLevel, LogQuery, LogStore};
 use crate::master::MasterNode;
+use crate::pending_store::PendingStore;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use warp::{http::StatusCode, Filter, Rejection, Reply};
 
@@ -13,13 +15,15 @@ use warp::{http::StatusCode, Filter, Rejection, Reply};
 pub struct AdminContext {
     pub master: Arc<MasterNode>,
     pub log_store: Arc<LogStore>,
+    pub pending_store: Arc<PendingStore>,
 }
 
 impl AdminContext {
-    pub fn new(master: Arc<MasterNode>, log_store: LogStore) -> Self {
+    pub fn new(master: Arc<MasterNode>, log_store: LogStore, pending_store: Arc<PendingStore>) -> Self {
         Self {
             master,
             log_store: Arc::new(log_store),
+            pending_store,
         }
     }
 }
@@ -162,6 +166,76 @@ pub struct RouteRuleResponse {
     pub created_at: String,
 }
 
+/// 全量配置响应
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AllConfigs {
+    pub master: MasterConfigSection,
+    pub worker: WorkerConfigSection,
+    pub pending: PendingConfigSection,
+    pub guardian: GuardianConfigSection,
+    pub replica: ReplicaConfigSection,
+    pub quad_key: QuadKeyConfigSection,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MasterConfigSection {
+    pub heartbeat_timeout_secs: u64,
+    pub cleanup_interval_secs: u64,
+    pub max_message_size: usize,
+    pub protocol: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WorkerConfigSection {
+    pub cache_size: usize,
+    pub flush_interval_ms: u64,
+    pub heartbeat_interval_secs: u64,
+    pub weight: i32,
+    pub kv_ext: String,
+    pub meta_ext: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PendingConfigSection {
+    pub gc_interval_secs: u64,
+    pub flush_timeout_secs: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GuardianConfigSection {
+    pub probe_interval_secs: u64,
+    pub probe_timeout_secs: u64,
+    pub failure_threshold: u32,
+    pub backoff_base_secs: u64,
+    pub backoff_max_secs: u64,
+    pub cooldown_after_failures: u32,
+    pub cooldown_secs: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ReplicaConfigSection {
+    pub replication_factor: i32,
+    pub strategy: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct QuadKeyConfigSection {
+    pub base_level: u32,
+    pub split_level: u32,
+}
+
+/// Pending 统计响应
+#[derive(Debug, Serialize)]
+pub struct PendingStats {
+    pub regions: HashMap<String, PendingRegionStat>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PendingRegionStat {
+    pub count: usize,
+    pub bytes: u64,
+}
+
 // ============================================================
 // 错误处理
 // ============================================================
@@ -294,6 +368,35 @@ pub async fn start_admin_api(ctx: AdminContext, port: u16) {
         .and(warp::any().map(move || health_ctx.clone()))
         .and_then(handle_health_check);
 
+    // GET /api/v1/config - 获取全量配置
+    let get_config_ctx = ctx.clone();
+    let get_config_route = warp::path!("api" / "v1" / "config")
+        .and(warp::get())
+        .and(warp::any().map(move || get_config_ctx.clone()))
+        .and_then(handle_get_config);
+
+    // PUT /api/v1/config - 更新配置
+    let put_config_ctx = ctx.clone();
+    let put_config_route = warp::path!("api" / "v1" / "config")
+        .and(warp::put())
+        .and(warp::body::json())
+        .and(warp::any().map(move || put_config_ctx.clone()))
+        .and_then(handle_put_config);
+
+    // GET /api/v1/pending - Pending 统计
+    let pending_ctx = ctx.clone();
+    let pending_route = warp::path!("api" / "v1" / "pending")
+        .and(warp::get())
+        .and(warp::any().map(move || pending_ctx.clone()))
+        .and_then(handle_get_pending);
+
+    // DELETE /api/v1/pending/:region - 清空 region pending
+    let clear_pending_ctx = ctx.clone();
+    let clear_pending_route = warp::path!("api" / "v1" / "pending" / String)
+        .and(warp::delete())
+        .and(warp::any().map(move || clear_pending_ctx.clone()))
+        .and_then(handle_clear_pending);
+
     let routes = overview_route
         .or(workers_route)
         .or(worker_detail_route)
@@ -304,6 +407,10 @@ pub async fn start_admin_api(ctx: AdminContext, port: u16) {
         .or(ack_all_route)
         .or(routes_route)
         .or(health_route)
+        .or(get_config_route)
+        .or(put_config_route)
+        .or(pending_route)
+        .or(clear_pending_route)
         .with(cors())
         .recover(handle_rejection);
 
@@ -542,4 +649,128 @@ async fn handle_health_check(ctx: Arc<AdminContext>) -> Result<impl Reply, Rejec
     });
 
     Ok(warp::reply::json(&ApiResponse::ok(health)))
+}
+
+// ============================================================
+// Config Handlers
+// ============================================================
+
+async fn handle_get_config(ctx: Arc<AdminContext>) -> Result<impl Reply, Rejection> {
+    let mc = &ctx.master.config;
+    let wd = ctx.master.worker_defaults.as_ref();
+
+    let config = AllConfigs {
+        master: MasterConfigSection {
+            heartbeat_timeout_secs: mc.heartbeat_timeout_secs,
+            cleanup_interval_secs: mc.cleanup_interval_secs,
+            max_message_size: ctx.master.get_max_message_size(),
+            protocol: ctx.master.protocol.clone(),
+        },
+        worker: WorkerConfigSection {
+            cache_size: wd.cache_size,
+            flush_interval_ms: wd.flush_interval_ms,
+            heartbeat_interval_secs: wd.heartbeat_interval_secs,
+            weight: wd.weight,
+            kv_ext: wd.kv_ext.clone(),
+            meta_ext: wd.meta_ext.clone(),
+        },
+        pending: PendingConfigSection {
+            gc_interval_secs: mc.pending_gc_interval_secs,
+            flush_timeout_secs: mc.pending_flush_timeout_secs,
+        },
+        guardian: GuardianConfigSection {
+            probe_interval_secs: 5,
+            probe_timeout_secs: 3,
+            failure_threshold: 3,
+            backoff_base_secs: 1,
+            backoff_max_secs: 60,
+            cooldown_after_failures: 10,
+            cooldown_secs: 300,
+        },
+        replica: ReplicaConfigSection {
+            replication_factor: 2,
+            strategy: "all".to_string(),
+        },
+        quad_key: QuadKeyConfigSection {
+            base_level: wd.quad_shard.base_level,
+            split_level: wd.quad_shard.split_level,
+        },
+    };
+
+    Ok(warp::reply::json(&ApiResponse::ok(config)))
+}
+
+async fn handle_put_config(
+    body: AllConfigs,
+    ctx: Arc<AdminContext>,
+) -> Result<impl Reply, Rejection> {
+    // 更新集群 config 表
+    let store = &ctx.master.store;
+    let updates = vec![
+        ("heartbeat_timeout_secs", body.master.heartbeat_timeout_secs.to_string()),
+        ("cleanup_interval_secs", body.master.cleanup_interval_secs.to_string()),
+        ("cache_size", body.worker.cache_size.to_string()),
+        ("flush_interval_ms", body.worker.flush_interval_ms.to_string()),
+        ("heartbeat_interval_secs", body.worker.heartbeat_interval_secs.to_string()),
+        ("weight", body.worker.weight.to_string()),
+        ("replication_factor", body.replica.replication_factor.to_string()),
+        ("replication_strategy", body.replica.strategy.clone()),
+        ("base_level", body.quad_key.base_level.to_string()),
+        ("split_level", body.quad_key.split_level.to_string()),
+    ];
+    for (key, value) in &updates {
+        let _ = store.set_config(key, value);
+    }
+
+    // 推送 Worker 配置热更新
+    let config_json = serde_json::json!({
+        "type": "config_update",
+        "cache_size": body.worker.cache_size,
+        "flush_interval_ms": body.worker.flush_interval_ms,
+        "heartbeat_interval_secs": body.worker.heartbeat_interval_secs,
+        "weight": body.worker.weight,
+    });
+    // 通过 ConfigBroadcaster 广播给所有 Worker
+    if let Some(broadcaster) = ctx.master.config_broadcaster() {
+        broadcaster.broadcast_all(&config_json.to_string());
+    }
+
+    Ok(warp::reply::json(&ApiResponse::ok(
+        serde_json::json!({"updated": updates.len()}),
+    )))
+}
+
+// ============================================================
+// Pending Handlers
+// ============================================================
+
+async fn handle_get_pending(ctx: Arc<AdminContext>) -> Result<impl Reply, Rejection> {
+    let mut regions = HashMap::new();
+    for region in &["0", "1", "2", "3"] {
+        let count = ctx
+            .pending_store
+            .list_by_status(region, &["pending", "flushing"])
+            .unwrap_or_default()
+            .len();
+        let bytes_estimate = if count > 0 { count as u64 * 4096 } else { 0 };
+        regions.insert(
+            region.to_string(),
+            PendingRegionStat {
+                count,
+                bytes: bytes_estimate,
+            },
+        );
+    }
+    Ok(warp::reply::json(&ApiResponse::ok(PendingStats { regions })))
+}
+
+async fn handle_clear_pending(
+    region: String,
+    ctx: Arc<AdminContext>,
+) -> Result<impl Reply, Rejection> {
+    // 清空指定 region 的 pending（强制 GC）
+    let cleaned = ctx.pending_store.gc_done(&region, 0).unwrap_or(0);
+    Ok(warp::reply::json(&ApiResponse::ok(
+        serde_json::json!({"cleaned": cleaned, "region": region}),
+    )))
 }

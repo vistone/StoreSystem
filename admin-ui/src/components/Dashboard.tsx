@@ -11,9 +11,11 @@ import { ClusterWorkflow } from '@/components/workflow/ClusterWorkflow';
 import { WorkerDetailPanel } from '@/components/panels/WorkerDetailPanel';
 import { LogPanel } from '@/components/panels/LogPanel';
 import { RoutePanel } from '@/components/panels/RoutePanel';
+import { ConfigPanel } from '@/components/panels/ConfigPanel';
+import { PendingPanel } from '@/components/panels/PendingPanel';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { useClusterStore } from '@/stores/cluster-store';
-import { RefreshCw, Wifi, WifiOff } from 'lucide-react';
+import { Wifi, WifiOff } from 'lucide-react';
 
 export function Dashboard() {
   const [activeTab, setActiveTab] = useState<TabId>('workflow');
@@ -37,6 +39,7 @@ export function Dashboard() {
               {activeTab === 'workers' && 'Worker 节点列表'}
               {activeTab === 'logs' && '实时日志'}
               {activeTab === 'routes' && '路由规则'}
+              {activeTab === 'pending' && '待处理缓存'}
               {activeTab === 'settings' && '设置'}
             </h1>
           </div>
@@ -111,47 +114,15 @@ export function Dashboard() {
             </div>
           )}
 
+          {activeTab === 'pending' && (
+            <div className="h-full p-3 lg:p-4">
+              <PendingPanel />
+            </div>
+          )}
+
           {activeTab === 'settings' && (
             <div className="h-full p-3 lg:p-4">
-              <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-6">
-                <h2 className="text-lg font-bold text-gray-800 dark:text-gray-200 mb-4">系统设置</h2>
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-medium text-gray-700 dark:text-gray-300">自动刷新</p>
-                      <p className="text-xs text-gray-500">开启后页面数据将自动更新</p>
-                    </div>
-                    <button
-                      onClick={() => setAutoRefresh(!autoRefresh)}
-                      className={`relative w-10 h-5 rounded-full transition-colors ${
-                        autoRefresh ? 'bg-indigo-500' : 'bg-gray-300 dark:bg-gray-600'
-                      }`}
-                    >
-                      <div
-                        className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${
-                          autoRefresh ? 'translate-x-5' : 'translate-x-0.5'
-                        }`}
-                      />
-                    </button>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-medium text-gray-700 dark:text-gray-300">API 地址</p>
-                      <p className="text-xs text-gray-500 font-mono">
-                        {process.env.NEXT_PUBLIC_API_URL || 'http://localhost:50052'}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-medium text-gray-700 dark:text-gray-300">WebSocket 地址</p>
-                      <p className="text-xs text-gray-500 font-mono">
-                        {process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:50052'}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
+              <ConfigPanel />
             </div>
           )}
         </main>

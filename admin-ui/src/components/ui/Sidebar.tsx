@@ -9,13 +9,14 @@ import {
   Table2,
   FileText,
   GitBranch,
+  HardDrive,
   Settings,
   Wifi,
   WifiOff,
 } from 'lucide-react';
 import { useClusterStore } from '@/stores/cluster-store';
 
-export type TabId = 'workflow' | 'workers' | 'logs' | 'routes' | 'settings';
+export type TabId = 'workflow' | 'workers' | 'logs' | 'routes' | 'pending' | 'settings';
 
 interface SidebarProps {
   activeTab: TabId;
@@ -27,6 +28,7 @@ const tabs: { id: TabId; label: string; icon: any }[] = [
   { id: 'workers', label: 'Worker 列表', icon: Table2 },
   { id: 'logs', label: '日志', icon: FileText },
   { id: 'routes', label: '路由规则', icon: GitBranch },
+  { id: 'pending', label: 'Pending', icon: HardDrive },
   { id: 'settings', label: '设置', icon: Settings },
 ];
 

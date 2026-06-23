@@ -102,6 +102,31 @@ export async function getHealth(): Promise<ApiResponse<HealthStatus>> {
   return fetchApi('/api/v1/health');
 }
 
+// ---------- 配置管理 ----------
+
+export async function getConfig(): Promise<ApiResponse<import('@/types').AllConfigs>> {
+  return fetchApi('/api/v1/config');
+}
+
+export async function updateConfig(config: import('@/types').AllConfigs): Promise<ApiResponse<{updated: number}>> {
+  return fetchApi('/api/v1/config', {
+    method: 'PUT',
+    body: JSON.stringify(config),
+  });
+}
+
+// ---------- Pending 缓存 ----------
+
+export async function getPendingStats(): Promise<ApiResponse<import('@/types').PendingStats>> {
+  return fetchApi('/api/v1/pending');
+}
+
+export async function clearPendingRegion(region: string): Promise<ApiResponse<{cleaned: number; region: string}>> {
+  return fetchApi(`/api/v1/pending/${encodeURIComponent(region)}`, {
+    method: 'DELETE',
+  });
+}
+
 // ---------- WebSocket 连接 ----------
 
 export function createLogWebSocket(): WebSocket {

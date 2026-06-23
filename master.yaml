@@ -32,6 +32,15 @@ master:
   # 清理宕机 Worker 的间隔（秒）
   cleanup_interval_secs: 60
 
+  # Pending 缓存配置（区域 Worker 宕机时 Master 本地兜底）
+  pending:
+    # 数据目录
+    data_dir: "master_data/pending"
+    # 惰性 GC 间隔（秒）
+    gc_interval_secs: 60
+    # flushing 超时（秒）
+    flush_timeout_secs: 60
+
 # ---------- Worker 默认配置（Master 持有，注册时下发给 Worker） ----------
 # Worker 启动时仅需 worker_id、listen_addr、master_addr、data_dir，
 # 其余配置（扩展名、性能参数、quad_shard 等）均由此段下发。

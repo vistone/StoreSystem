@@ -150,3 +150,66 @@ export interface WorkflowNodeData {
   };
   status?: 'healthy' | 'warning' | 'critical' | 'dead';
 }
+
+// ---------- 配置管理 ----------
+
+export interface AllConfigs {
+  master: MasterConfig;
+  worker: WorkerConfig;
+  pending: PendingConfig;
+  guardian: GuardianConfig;
+  replica: ReplicaConfig;
+  quad_key: QuadKeyConfig;
+}
+
+export interface MasterConfig {
+  heartbeat_timeout_secs: number;
+  cleanup_interval_secs: number;
+  max_message_size: number;
+  protocol: string;
+}
+
+export interface WorkerConfig {
+  cache_size: number;
+  flush_interval_ms: number;
+  heartbeat_interval_secs: number;
+  weight: number;
+  kv_ext: string;
+  meta_ext: string;
+}
+
+export interface PendingConfig {
+  gc_interval_secs: number;
+  flush_timeout_secs: number;
+}
+
+export interface GuardianConfig {
+  probe_interval_secs: number;
+  probe_timeout_secs: number;
+  failure_threshold: number;
+  backoff_base_secs: number;
+  backoff_max_secs: number;
+  cooldown_after_failures: number;
+  cooldown_secs: number;
+}
+
+export interface ReplicaConfig {
+  replication_factor: number;
+  strategy: string;
+}
+
+export interface QuadKeyConfig {
+  base_level: number;
+  split_level: number;
+}
+
+// ---------- Pending 缓存 ----------
+
+export interface PendingStats {
+  regions: Record<string, PendingRegionStat>;
+}
+
+export interface PendingRegionStat {
+  count: number;
+  bytes: number;
+}

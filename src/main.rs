@@ -68,7 +68,7 @@ async fn run_master(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>
     let mc = &config.master;
     let gc = &config.global;
 
-    let master = MasterNode::open_with_worker_defaults(
+    let mut master = MasterNode::open_with_worker_defaults(
         store_system::master::MasterConfig {
             listen_addr: mc.listen_addr.clone(),
             meta_path: mc.meta_path.clone(),
@@ -82,13 +82,27 @@ async fn run_master(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>
         config.worker_defaults.clone(),
         config.worker_regions.clone(),
     )?;
-    let master = Arc::new(master);
 
     // 初始化日志存储（SQLite 持久化）
     let log_store_path = format!("{}_logs.db", mc.meta_path.trim_end_matches(".db"));
     let log_store = LogStore::open(&log_store_path)?;
     let log_store = Arc::new(log_store);
     println!("📋 日志数据库: {}", log_store_path);
+
+    // 初始化日志 WS 服务（先创建以获取 broadcaster）
+    let log_ws_port = 50053;
+    let pending_store = master.pending_store.clone();
+    let log_ws_server = MasterLogWsServer::new(
+        log_store.as_ref().clone(),
+        log_ws_port,
+        pending_store.clone(),
+    );
+    let broadcaster = log_ws_server.config_broadcaster();
+
+    // 设置 Master 的配置推送器（用于配置热更新推送）
+    master.set_config_broadcaster(broadcaster);
+
+    let master = Arc::new(master);
 
     // 启动后台清理任务（宕机 Worker 检测）
     let cleanup_master = master.clone();
@@ -151,7 +165,11 @@ async fn run_master(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>
     };
 
     // Admin API 服务（为前端提供 RESTful 接口）
-    let admin_ctx = AdminContext::new(master.clone(), log_store.as_ref().clone());
+    let admin_ctx = AdminContext::new(
+        master.clone(),
+        log_store.as_ref().clone(),
+        master.pending_store.clone(),
+    );
     let admin_port = 50052;
     let admin_server = async {
         start_admin_api(admin_ctx, admin_port).await;

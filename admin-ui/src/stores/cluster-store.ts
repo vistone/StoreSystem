@@ -9,6 +9,8 @@ import type {
   LogEntry,
   LogStats,
   RouteRule,
+  AllConfigs,
+  PendingStats,
 } from '@/types';
 import * as api from '@/lib/api';
 
@@ -40,6 +42,15 @@ interface ClusterState {
   // 自动刷新
   autoRefresh: boolean;
 
+  // 配置
+  config: AllConfigs | null;
+  configLoading: boolean;
+  configError: string | null;
+
+  // Pending 缓存
+  pendingStats: PendingStats | null;
+  pendingLoading: boolean;
+
   // Actions
   fetchOverview: () => Promise<void>;
   fetchWorkers: () => Promise<void>;
@@ -52,6 +63,10 @@ interface ClusterState {
   setWsConnected: (v: boolean) => void;
   addLogs: (entries: LogEntry[]) => void;
   updateWorkersFromWs: (workers: any[]) => void;
+  fetchConfig: () => Promise<void>;
+  updateConfig: (c: AllConfigs) => Promise<boolean>;
+  fetchPending: () => Promise<void>;
+  clearPending: (region: string) => Promise<void>;
 }
 
 export const useClusterStore = create<ClusterState>((set, get) => ({
@@ -74,6 +89,13 @@ export const useClusterStore = create<ClusterState>((set, get) => ({
 
   wsConnected: false,
   autoRefresh: true,
+
+  config: null,
+  configLoading: false,
+  configError: null,
+
+  pendingStats: null,
+  pendingLoading: false,
 
   fetchOverview: async () => {
     set({ overviewLoading: true, overviewError: null });
@@ -216,5 +238,65 @@ export const useClusterStore = create<ClusterState>((set, get) => ({
       });
       return { workers: updated };
     });
+  },
+
+  // ---------- 配置管理 ----------
+
+  fetchConfig: async () => {
+    set({ configLoading: true, configError: null });
+    try {
+      const res = await api.getConfig();
+      if (res.success && res.data) {
+        set({ config: res.data });
+      } else {
+        set({ configError: res.error || '获取配置失败' });
+      }
+    } catch (e: any) {
+      set({ configError: e.message });
+    } finally {
+      set({ configLoading: false });
+    }
+  },
+
+  updateConfig: async (c: AllConfigs): Promise<boolean> => {
+    try {
+      const res = await api.updateConfig(c);
+      if (res.success && res.data) {
+        set({ config: c });
+        return true;
+      } else {
+        set({ configError: res.error || '更新配置失败' });
+        return false;
+      }
+    } catch (e: any) {
+      set({ configError: e.message });
+      return false;
+    }
+  },
+
+  // ---------- Pending 缓存 ----------
+
+  fetchPending: async () => {
+    set({ pendingLoading: true });
+    try {
+      const res = await api.getPendingStats();
+      if (res.success && res.data) {
+        set({ pendingStats: res.data });
+      }
+    } catch {
+      // ignore
+    } finally {
+      set({ pendingLoading: false });
+    }
+  },
+
+  clearPending: async (region: string) => {
+    try {
+      await api.clearPendingRegion(region);
+      // 刷新 pending 状态
+      get().fetchPending();
+    } catch {
+      // ignore
+    }
   },
 }));

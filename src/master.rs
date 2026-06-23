@@ -3,6 +3,7 @@ use crate::grpc::proto;
 use crate::master_http::WorkerHttpClient;
 use crate::master_store::MasterStore;
 use crate::master_ws::WorkerWsClient;
+use crate::master_log_ws::ConfigBroadcaster;
 use crate::meta::ObjectMeta;
 use crate::pending_store::PendingStore;
 use bytes::Bytes;
@@ -124,13 +125,15 @@ pub struct MasterNode {
     /// Worker WS 客户端缓存
     ws_clients: Arc<DashMap<String, WorkerWsClient>>,
     /// Worker 默认配置（Master 持有，注册时下发给 Worker）
-    worker_defaults: Arc<crate::config::WorkerDefaultsConfig>,
+    pub worker_defaults: Arc<crate::config::WorkerDefaultsConfig>,
     /// Worker 区域分配映射（worker_id → region）
     worker_regions: Arc<HashMap<String, String>>,
     /// 配置版本号（每次变更递增，初始为 1）
     config_version: Arc<std::sync::atomic::AtomicU64>,
     /// Pending 缓存（区域 Worker 宕机时 Master 本地兜底）
     pub pending_store: Arc<PendingStore>,
+    /// 配置推送器（广播配置更新给 Worker）
+    config_broadcaster: Option<Arc<ConfigBroadcaster>>,
 }
 
 /// Master 下发给 Worker 的配置载体
@@ -233,7 +236,23 @@ impl MasterNode {
             worker_regions: Arc::new(HashMap::new()),
             config_version: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             pending_store,
+            config_broadcaster: None,
         })
+    }
+
+    /// 设置配置推送器（由 run_master 在创建 LogWsServer 后调用）
+    pub fn set_config_broadcaster(&mut self, broadcaster: Arc<ConfigBroadcaster>) {
+        self.config_broadcaster = Some(broadcaster);
+    }
+
+    /// 获取配置推送器引用
+    pub fn config_broadcaster(&self) -> Option<&Arc<ConfigBroadcaster>> {
+        self.config_broadcaster.as_ref()
+    }
+
+    /// 获取最大消息大小
+    pub fn get_max_message_size(&self) -> usize {
+        256 * 1024 * 1024
     }
 
     /// 使用 Worker 默认配置和区域映射打开 Master 节点
