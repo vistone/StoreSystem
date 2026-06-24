@@ -2,9 +2,9 @@
 // Worker 详情面板 - 表格形式展示 Worker 详细信息
 // ============================================================
 
-'use client';
+"use client";
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState } from "react";
 import {
   Server,
   Cpu,
@@ -15,15 +15,23 @@ import {
   Tag,
   Search,
   RefreshCw,
-} from 'lucide-react';
-import { useClusterStore } from '@/stores/cluster-store';
-import { formatBytes, formatPercent, formatTimestamp, getDiskHealthColor } from '@/lib/utils';
-import type { WorkerNodeInfo } from '@/types';
+} from "lucide-react";
+import { useClusterStore } from "@/stores/cluster-store";
+import {
+  formatBytes,
+  formatPercent,
+  formatTimestamp,
+  getDiskHealthColor,
+} from "@/lib/utils";
+import type { WorkerNodeInfo } from "@/types";
 
 export function WorkerDetailPanel() {
-  const { workers, workersLoading, fetchWorkers, autoRefresh } = useClusterStore();
-  const [searchTerm, setSearchTerm] = useState('');
-  const [sortBy, setSortBy] = useState<'cpu' | 'memory' | 'storage' | 'name'>('name');
+  const { workers, workersLoading, fetchWorkers, autoRefresh } =
+    useClusterStore();
+  const [searchTerm, setSearchTerm] = useState("");
+  const [sortBy, setSortBy] = useState<"cpu" | "memory" | "storage" | "name">(
+    "name",
+  );
 
   useEffect(() => {
     fetchWorkers();
@@ -33,16 +41,21 @@ export function WorkerDetailPanel() {
   }, [fetchWorkers, autoRefresh]);
 
   const filtered = workers
-    .filter((w) =>
-      w.worker_id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      w.address.toLowerCase().includes(searchTerm.toLowerCase())
+    .filter(
+      (w) =>
+        w.worker_id.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        w.address.toLowerCase().includes(searchTerm.toLowerCase()),
     )
     .sort((a, b) => {
       switch (sortBy) {
-        case 'cpu': return b.cpu_usage_ratio - a.cpu_usage_ratio;
-        case 'memory': return b.memory_usage_ratio - a.memory_usage_ratio;
-        case 'storage': return b.storage_usage_ratio - a.storage_usage_ratio;
-        default: return a.worker_id.localeCompare(b.worker_id);
+        case "cpu":
+          return b.cpu_usage_ratio - a.cpu_usage_ratio;
+        case "memory":
+          return b.memory_usage_ratio - a.memory_usage_ratio;
+        case "storage":
+          return b.storage_usage_ratio - a.storage_usage_ratio;
+        default:
+          return a.worker_id.localeCompare(b.worker_id);
       }
     });
 
@@ -82,7 +95,9 @@ export function WorkerDetailPanel() {
             onClick={() => fetchWorkers()}
             className="p-1.5 rounded-lg text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${workersLoading ? 'animate-spin' : ''}`} />
+            <RefreshCw
+              className={`w-3.5 h-3.5 ${workersLoading ? "animate-spin" : ""}`}
+            />
           </button>
         </div>
       </div>
@@ -100,7 +115,6 @@ export function WorkerDetailPanel() {
               <th className="text-center px-3 py-2 font-medium">存储</th>
               <th className="text-center px-3 py-2 font-medium">磁盘</th>
               <th className="text-center px-3 py-2 font-medium">连接</th>
-              <th className="text-center px-3 py-2 font-medium">权重</th>
               <th className="text-right px-4 py-2 font-medium">心跳</th>
             </tr>
           </thead>
@@ -129,7 +143,7 @@ function WorkerRow({ worker }: { worker: WorkerNodeInfo }) {
         <div className="flex items-center gap-2">
           <div
             className={`w-2 h-2 rounded-full ${
-              worker.alive ? 'bg-green-500' : 'bg-gray-400'
+              worker.alive ? "bg-green-500" : "bg-gray-400"
             }`}
           />
           <span className="font-medium text-gray-800 dark:text-gray-200">
@@ -142,11 +156,11 @@ function WorkerRow({ worker }: { worker: WorkerNodeInfo }) {
         <span
           className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${
             worker.alive
-              ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
-              : 'bg-gray-100 text-gray-500 dark:bg-gray-900/30 dark:text-gray-400'
+              ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+              : "bg-gray-100 text-gray-500 dark:bg-gray-900/30 dark:text-gray-400"
           }`}
         >
-          {worker.alive ? '在线' : '离线'}
+          {worker.alive ? "在线" : "离线"}
         </span>
       </td>
       <td className="px-3 py-2.5">
@@ -157,8 +171,11 @@ function WorkerRow({ worker }: { worker: WorkerNodeInfo }) {
               style={{
                 width: `${Math.min(worker.cpu_usage_ratio * 100, 100)}%`,
                 backgroundColor:
-                  worker.cpu_usage_ratio > 0.8 ? '#ef4444' :
-                  worker.cpu_usage_ratio > 0.6 ? '#eab308' : '#22c55e',
+                  worker.cpu_usage_ratio > 0.8
+                    ? "#ef4444"
+                    : worker.cpu_usage_ratio > 0.6
+                      ? "#eab308"
+                      : "#22c55e",
               }}
             />
           </div>
@@ -175,8 +192,11 @@ function WorkerRow({ worker }: { worker: WorkerNodeInfo }) {
               style={{
                 width: `${Math.min(worker.memory_usage_ratio * 100, 100)}%`,
                 backgroundColor:
-                  worker.memory_usage_ratio > 0.8 ? '#ef4444' :
-                  worker.memory_usage_ratio > 0.6 ? '#eab308' : '#3b82f6',
+                  worker.memory_usage_ratio > 0.8
+                    ? "#ef4444"
+                    : worker.memory_usage_ratio > 0.6
+                      ? "#eab308"
+                      : "#3b82f6",
               }}
             />
           </div>
@@ -214,9 +234,6 @@ function WorkerRow({ worker }: { worker: WorkerNodeInfo }) {
       </td>
       <td className="px-3 py-2.5 text-center text-gray-600 dark:text-gray-400">
         {worker.active_connections}
-      </td>
-      <td className="px-3 py-2.5 text-center text-gray-600 dark:text-gray-400">
-        {worker.weight}
       </td>
       <td className="px-4 py-2.5 text-right text-gray-400 font-mono text-[10px]">
         {formatTimestamp(worker.last_heartbeat)}

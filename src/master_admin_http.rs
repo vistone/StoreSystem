@@ -19,7 +19,11 @@ pub struct AdminContext {
 }
 
 impl AdminContext {
-    pub fn new(master: Arc<MasterNode>, log_store: LogStore, pending_store: Arc<PendingStore>) -> Self {
+    pub fn new(
+        master: Arc<MasterNode>,
+        log_store: LogStore,
+        pending_store: Arc<PendingStore>,
+    ) -> Self {
         Self {
             master,
             log_store: Arc::new(log_store),
@@ -190,7 +194,6 @@ pub struct WorkerConfigSection {
     pub cache_size: usize,
     pub flush_interval_ms: u64,
     pub heartbeat_interval_secs: u64,
-    pub weight: i32,
     pub kv_ext: String,
     pub meta_ext: String,
 }
@@ -670,7 +673,6 @@ async fn handle_get_config(ctx: Arc<AdminContext>) -> Result<impl Reply, Rejecti
             cache_size: wd.cache_size,
             flush_interval_ms: wd.flush_interval_ms,
             heartbeat_interval_secs: wd.heartbeat_interval_secs,
-            weight: wd.weight,
             kv_ext: wd.kv_ext.clone(),
             meta_ext: wd.meta_ext.clone(),
         },
@@ -707,13 +709,27 @@ async fn handle_put_config(
     // 更新集群 config 表
     let store = &ctx.master.store;
     let updates = vec![
-        ("heartbeat_timeout_secs", body.master.heartbeat_timeout_secs.to_string()),
-        ("cleanup_interval_secs", body.master.cleanup_interval_secs.to_string()),
+        (
+            "heartbeat_timeout_secs",
+            body.master.heartbeat_timeout_secs.to_string(),
+        ),
+        (
+            "cleanup_interval_secs",
+            body.master.cleanup_interval_secs.to_string(),
+        ),
         ("cache_size", body.worker.cache_size.to_string()),
-        ("flush_interval_ms", body.worker.flush_interval_ms.to_string()),
-        ("heartbeat_interval_secs", body.worker.heartbeat_interval_secs.to_string()),
-        ("weight", body.worker.weight.to_string()),
-        ("replication_factor", body.replica.replication_factor.to_string()),
+        (
+            "flush_interval_ms",
+            body.worker.flush_interval_ms.to_string(),
+        ),
+        (
+            "heartbeat_interval_secs",
+            body.worker.heartbeat_interval_secs.to_string(),
+        ),
+        (
+            "replication_factor",
+            body.replica.replication_factor.to_string(),
+        ),
         ("replication_strategy", body.replica.strategy.clone()),
         ("base_level", body.quad_key.base_level.to_string()),
         ("split_level", body.quad_key.split_level.to_string()),
@@ -728,7 +744,6 @@ async fn handle_put_config(
         "cache_size": body.worker.cache_size,
         "flush_interval_ms": body.worker.flush_interval_ms,
         "heartbeat_interval_secs": body.worker.heartbeat_interval_secs,
-        "weight": body.worker.weight,
     });
     // 通过 ConfigBroadcaster 广播给所有 Worker
     if let Some(broadcaster) = ctx.master.config_broadcaster() {
@@ -761,7 +776,9 @@ async fn handle_get_pending(ctx: Arc<AdminContext>) -> Result<impl Reply, Reject
             },
         );
     }
-    Ok(warp::reply::json(&ApiResponse::ok(PendingStats { regions })))
+    Ok(warp::reply::json(&ApiResponse::ok(PendingStats {
+        regions,
+    })))
 }
 
 async fn handle_clear_pending(

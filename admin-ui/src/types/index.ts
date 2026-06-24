@@ -31,7 +31,6 @@ export interface ClusterOverview {
 export interface WorkerNodeInfo {
   worker_id: string;
   address: string;
-  weight: number;
   alive: boolean;
   last_heartbeat: number;
   storage_used_bytes: number;
@@ -46,14 +45,14 @@ export interface WorkerNodeInfo {
   active_connections: number;
   tags: Record<string, string>;
   // ---- 写入统计（v0.3.0 新增） ----
-  total_put_count: number;       // 累计写入操作数
-  total_put_bytes: number;       // 累计写入字节数
-  flushed_count: number;         // 已刷盘操作数（已入库）
-  flushed_bytes: number;         // 已刷盘字节数（已入库）
-  pending_count: number;         // 待刷盘操作数（缓存中未入库）
-  pending_bytes: number;         // 待刷盘字节数（缓存中未入库）
-  write_rate_per_sec: number;    // 写入速率 ops/sec
-  write_bytes_per_sec: number;   // 写入带宽 bytes/sec
+  total_put_count: number; // 累计写入操作数
+  total_put_bytes: number; // 累计写入字节数
+  flushed_count: number; // 已刷盘操作数（已入库）
+  flushed_bytes: number; // 已刷盘字节数（已入库）
+  pending_count: number; // 待刷盘操作数（缓存中未入库）
+  pending_bytes: number; // 待刷盘字节数（缓存中未入库）
+  write_rate_per_sec: number; // 写入速率 ops/sec
+  write_bytes_per_sec: number; // 写入带宽 bytes/sec
 }
 
 // ---------- 日志 ----------
@@ -105,12 +104,12 @@ export interface HealthStatus {
 // ---------- WebSocket 消息 ----------
 
 export interface WsLogMessage {
-  type: 'logs';
+  type: "logs";
   data: LogEntry[];
 }
 
 export interface WsOverviewMessage {
-  type: 'overview';
+  type: "overview";
   data: {
     total_workers: number;
     alive_workers: number;
@@ -130,13 +129,13 @@ export type WsMessage = WsLogMessage | WsOverviewMessage;
 // ---------- 工作流节点类型 ----------
 
 export type WorkflowNodeType =
-  | 'master'
-  | 'worker'
-  | 'worker-alive'
-  | 'worker-dead'
-  | 'storage'
-  | 'log'
-  | 'route';
+  | "master"
+  | "worker"
+  | "worker-alive"
+  | "worker-dead"
+  | "storage"
+  | "log"
+  | "route";
 
 export interface WorkflowNodeData {
   label: string;
@@ -148,7 +147,7 @@ export interface WorkflowNodeData {
     storage?: number;
     connections?: number;
   };
-  status?: 'healthy' | 'warning' | 'critical' | 'dead';
+  status?: "healthy" | "warning" | "critical" | "dead";
 }
 
 // ---------- 配置管理 ----------
@@ -173,7 +172,6 @@ export interface WorkerConfig {
   cache_size: number;
   flush_interval_ms: number;
   heartbeat_interval_secs: number;
-  weight: number;
   kv_ext: string;
   meta_ext: string;
 }

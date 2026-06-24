@@ -2,9 +2,9 @@
 // 配置管理面板 - 系统运行时配置编辑
 // ============================================================
 
-'use client';
+"use client";
 
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef } from "react";
 import {
   Settings,
   Save,
@@ -14,20 +14,20 @@ import {
   XCircle,
   RefreshCw,
   Info,
-} from 'lucide-react';
-import { useClusterStore } from '@/stores/cluster-store';
-import type { AllConfigs } from '@/types';
+} from "lucide-react";
+import { useClusterStore } from "@/stores/cluster-store";
+import type { AllConfigs } from "@/types";
 
 // ============================================================
 // 配置项元数据
 // ============================================================
 
-type ReloadKind = 'hot' | 'restart' | 'yaml';
+type ReloadKind = "hot" | "restart" | "yaml";
 
 interface FieldMeta {
   key: string;
   label: string;
-  kind: 'number' | 'text' | 'select';
+  kind: "number" | "text" | "select";
   reload: ReloadKind;
   options?: string[];
   unit?: string;
@@ -42,68 +42,173 @@ interface ConfigSection {
 
 const SECTIONS: ConfigSection[] = [
   {
-    id: 'master',
-    label: 'Master',
-    configKey: 'master',
+    id: "master",
+    label: "Master",
+    configKey: "master",
     fields: [
-      { key: 'heartbeat_timeout_secs', label: '心跳超时', kind: 'number', reload: 'hot', unit: '秒' },
-      { key: 'cleanup_interval_secs', label: '清理间隔', kind: 'number', reload: 'hot', unit: '秒' },
-      { key: 'max_message_size', label: '最大消息大小', kind: 'number', reload: 'hot', unit: 'MB' },
-      { key: 'protocol', label: '通信协议', kind: 'select', reload: 'restart', options: ['grpc', 'restful', 'ws', 'both'] },
+      {
+        key: "heartbeat_timeout_secs",
+        label: "心跳超时",
+        kind: "number",
+        reload: "hot",
+        unit: "秒",
+      },
+      {
+        key: "cleanup_interval_secs",
+        label: "清理间隔",
+        kind: "number",
+        reload: "hot",
+        unit: "秒",
+      },
+      {
+        key: "max_message_size",
+        label: "最大消息大小",
+        kind: "number",
+        reload: "hot",
+        unit: "MB",
+      },
+      {
+        key: "protocol",
+        label: "通信协议",
+        kind: "select",
+        reload: "restart",
+        options: ["grpc", "restful", "ws", "both"],
+      },
     ],
   },
   {
-    id: 'worker',
-    label: 'Worker',
-    configKey: 'worker',
+    id: "worker",
+    label: "Worker",
+    configKey: "worker",
     fields: [
-      { key: 'cache_size', label: '缓存大小', kind: 'number', reload: 'hot' },
-      { key: 'flush_interval_ms', label: '刷盘间隔', kind: 'number', reload: 'hot', unit: '毫秒' },
-      { key: 'heartbeat_interval_secs', label: '心跳间隔', kind: 'number', reload: 'hot', unit: '秒' },
-      { key: 'weight', label: '权重', kind: 'number', reload: 'hot' },
-      { key: 'kv_ext', label: 'KV 扩展名', kind: 'text', reload: 'restart' },
-      { key: 'meta_ext', label: 'Meta 扩展名', kind: 'text', reload: 'restart' },
+      { key: "cache_size", label: "缓存大小", kind: "number", reload: "hot" },
+      {
+        key: "flush_interval_ms",
+        label: "刷盘间隔",
+        kind: "number",
+        reload: "hot",
+        unit: "毫秒",
+      },
+      {
+        key: "heartbeat_interval_secs",
+        label: "心跳间隔",
+        kind: "number",
+        reload: "hot",
+        unit: "秒",
+      },
+      { key: "kv_ext", label: "KV 扩展名", kind: "text", reload: "restart" },
+      {
+        key: "meta_ext",
+        label: "Meta 扩展名",
+        kind: "text",
+        reload: "restart",
+      },
     ],
   },
   {
-    id: 'pending',
-    label: 'Pending',
-    configKey: 'pending',
+    id: "pending",
+    label: "Pending",
+    configKey: "pending",
     fields: [
-      { key: 'gc_interval_secs', label: 'GC 间隔', kind: 'number', reload: 'hot', unit: '秒' },
-      { key: 'flush_timeout_secs', label: '刷盘超时', kind: 'number', reload: 'hot', unit: '秒' },
+      {
+        key: "gc_interval_secs",
+        label: "GC 间隔",
+        kind: "number",
+        reload: "hot",
+        unit: "秒",
+      },
+      {
+        key: "flush_timeout_secs",
+        label: "刷盘超时",
+        kind: "number",
+        reload: "hot",
+        unit: "秒",
+      },
     ],
   },
   {
-    id: 'guardian',
-    label: 'Guardian',
-    configKey: 'guardian',
+    id: "guardian",
+    label: "Guardian",
+    configKey: "guardian",
     fields: [
-      { key: 'probe_interval_secs', label: '探测间隔', kind: 'number', reload: 'yaml', unit: '秒' },
-      { key: 'probe_timeout_secs', label: '探测超时', kind: 'number', reload: 'yaml', unit: '秒' },
-      { key: 'failure_threshold', label: '故障阈值', kind: 'number', reload: 'yaml', unit: '次' },
-      { key: 'backoff_base_secs', label: '退避基数', kind: 'number', reload: 'yaml', unit: '秒' },
-      { key: 'backoff_max_secs', label: '最大退避', kind: 'number', reload: 'yaml', unit: '秒' },
-      { key: 'cooldown_after_failures', label: '冷却触发次数', kind: 'number', reload: 'yaml', unit: '次' },
-      { key: 'cooldown_secs', label: '冷却时间', kind: 'number', reload: 'yaml', unit: '秒' },
+      {
+        key: "probe_interval_secs",
+        label: "探测间隔",
+        kind: "number",
+        reload: "yaml",
+        unit: "秒",
+      },
+      {
+        key: "probe_timeout_secs",
+        label: "探测超时",
+        kind: "number",
+        reload: "yaml",
+        unit: "秒",
+      },
+      {
+        key: "failure_threshold",
+        label: "故障阈值",
+        kind: "number",
+        reload: "yaml",
+        unit: "次",
+      },
+      {
+        key: "backoff_base_secs",
+        label: "退避基数",
+        kind: "number",
+        reload: "yaml",
+        unit: "秒",
+      },
+      {
+        key: "backoff_max_secs",
+        label: "最大退避",
+        kind: "number",
+        reload: "yaml",
+        unit: "秒",
+      },
+      {
+        key: "cooldown_after_failures",
+        label: "冷却触发次数",
+        kind: "number",
+        reload: "yaml",
+        unit: "次",
+      },
+      {
+        key: "cooldown_secs",
+        label: "冷却时间",
+        kind: "number",
+        reload: "yaml",
+        unit: "秒",
+      },
     ],
   },
   {
-    id: 'replica',
-    label: 'Replica',
-    configKey: 'replica',
+    id: "replica",
+    label: "Replica",
+    configKey: "replica",
     fields: [
-      { key: 'replication_factor', label: '副本因子', kind: 'number', reload: 'yaml' },
-      { key: 'strategy', label: '复制策略', kind: 'select', reload: 'yaml', options: ['all', 'rack', 'custom'] },
+      {
+        key: "replication_factor",
+        label: "副本因子",
+        kind: "number",
+        reload: "yaml",
+      },
+      {
+        key: "strategy",
+        label: "复制策略",
+        kind: "select",
+        reload: "yaml",
+        options: ["all", "rack", "custom"],
+      },
     ],
   },
   {
-    id: 'quad_key',
-    label: 'QuadKey',
-    configKey: 'quad_key',
+    id: "quad_key",
+    label: "QuadKey",
+    configKey: "quad_key",
     fields: [
-      { key: 'base_level', label: '基础层级', kind: 'number', reload: 'hot' },
-      { key: 'split_level', label: '分割层级', kind: 'number', reload: 'hot' },
+      { key: "base_level", label: "基础层级", kind: "number", reload: "hot" },
+      { key: "split_level", label: "分割层级", kind: "number", reload: "hot" },
     ],
   },
 ];
@@ -113,14 +218,14 @@ const SECTIONS: ConfigSection[] = [
 // ============================================================
 
 function ReloadBadge({ kind }: { kind: ReloadKind }) {
-  if (kind === 'hot') {
+  if (kind === "hot") {
     return (
       <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">
         热加载
       </span>
     );
   }
-  if (kind === 'restart') {
+  if (kind === "restart") {
     return (
       <span
         className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 cursor-help"
@@ -148,7 +253,7 @@ function ReloadBadge({ kind }: { kind: ReloadKind }) {
 
 interface ToastState {
   show: boolean;
-  type: 'success' | 'error';
+  type: "success" | "error";
   message: string;
 }
 
@@ -157,11 +262,16 @@ interface ToastState {
 // ============================================================
 
 export function ConfigPanel() {
-  const { config, configLoading, configError, fetchConfig, updateConfig } = useClusterStore();
-  const [activeSection, setActiveSection] = useState('master');
+  const { config, configLoading, configError, fetchConfig, updateConfig } =
+    useClusterStore();
+  const [activeSection, setActiveSection] = useState("master");
   const [formValues, setFormValues] = useState<AllConfigs | null>(null);
   const [saving, setSaving] = useState(false);
-  const [toast, setToast] = useState<ToastState>({ show: false, type: 'success', message: '' });
+  const [toast, setToast] = useState<ToastState>({
+    show: false,
+    type: "success",
+    message: "",
+  });
   const seededRef = useRef(false);
 
   // 初始加载
@@ -177,19 +287,25 @@ export function ConfigPanel() {
     }
   }, [config]);
 
-  const showToast = useCallback((type: 'success' | 'error', message: string) => {
-    setToast({ show: true, type, message });
-    setTimeout(() => setToast((t) => ({ ...t, show: false })), 3000);
-  }, []);
+  const showToast = useCallback(
+    (type: "success" | "error", message: string) => {
+      setToast({ show: true, type, message });
+      setTimeout(() => setToast((t) => ({ ...t, show: false })), 3000);
+    },
+    [],
+  );
 
   const section = SECTIONS.find((s) => s.id === activeSection)!;
 
   // 获取字段当前值
   function getFieldValue(key: string): string {
-    if (!formValues) return '';
-    const sectionData = formValues[section.configKey] as unknown as Record<string, unknown>;
+    if (!formValues) return "";
+    const sectionData = formValues[section.configKey] as unknown as Record<
+      string,
+      unknown
+    >;
     const val = sectionData[key];
-    return val !== undefined && val !== null ? String(val) : '';
+    return val !== undefined && val !== null ? String(val) : "";
   }
 
   // 更新字段值
@@ -197,9 +313,12 @@ export function ConfigPanel() {
     if (!formValues) return;
     const field = section.fields.find((f) => f.key === key);
     const newConfig = JSON.parse(JSON.stringify(formValues)) as AllConfigs;
-    const sectionData = newConfig[section.configKey] as unknown as Record<string, unknown>;
+    const sectionData = newConfig[section.configKey] as unknown as Record<
+      string,
+      unknown
+    >;
 
-    if (field?.kind === 'number') {
+    if (field?.kind === "number") {
       const num = Number(rawValue);
       sectionData[key] = Number.isNaN(num) ? 0 : num;
     } else {
@@ -213,7 +332,7 @@ export function ConfigPanel() {
   function handleReset() {
     if (config) {
       setFormValues(JSON.parse(JSON.stringify(config)));
-      setToast({ show: false, type: 'success', message: '' });
+      setToast({ show: false, type: "success", message: "" });
     }
   }
 
@@ -230,12 +349,12 @@ export function ConfigPanel() {
     try {
       const ok = await updateConfig(formValues);
       if (ok) {
-        showToast('success', '配置已保存并生效');
+        showToast("success", "配置已保存并生效");
       } else {
-        showToast('error', '保存失败，请重试');
+        showToast("error", "保存失败，请重试");
       }
     } catch {
-      showToast('error', '保存时发生异常');
+      showToast("error", "保存时发生异常");
     } finally {
       setSaving(false);
     }
@@ -278,13 +397,13 @@ export function ConfigPanel() {
       {toast.show && (
         <div
           className={`absolute top-4 right-4 z-50 flex items-center gap-2 px-4 py-2.5 rounded-lg shadow-lg text-sm transition-all ${
-            toast.type === 'success'
-              ? 'bg-green-500 text-white'
-              : 'bg-red-500 text-white'
+            toast.type === "success"
+              ? "bg-green-500 text-white"
+              : "bg-red-500 text-white"
           }`}
-          style={{ animation: 'fadeIn 0.2s ease-out' }}
+          style={{ animation: "fadeIn 0.2s ease-out" }}
         >
-          {toast.type === 'success' ? (
+          {toast.type === "success" ? (
             <CheckCircle2 className="w-4 h-4" />
           ) : (
             <XCircle className="w-4 h-4" />
@@ -306,7 +425,9 @@ export function ConfigPanel() {
           className="p-1.5 rounded-lg text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
           title="刷新"
         >
-          <RefreshCw className={`w-3.5 h-3.5 ${configLoading ? 'animate-spin' : ''}`} />
+          <RefreshCw
+            className={`w-3.5 h-3.5 ${configLoading ? "animate-spin" : ""}`}
+          />
         </button>
       </div>
 
@@ -323,8 +444,8 @@ export function ConfigPanel() {
                   onClick={() => setActiveSection(s.id)}
                   className={`w-full text-left px-3 py-2 text-sm transition-colors ${
                     isActive
-                      ? 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 border-r-2 border-indigo-500 font-medium'
-                      : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50'
+                      ? "bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 border-r-2 border-indigo-500 font-medium"
+                      : "text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50"
                   }`}
                 >
                   {s.label}
@@ -356,7 +477,7 @@ export function ConfigPanel() {
                   </div>
 
                   {/* 输入控件 */}
-                  {field.kind === 'select' ? (
+                  {field.kind === "select" ? (
                     <select
                       value={getFieldValue(field.key)}
                       onChange={(e) => setFieldValue(field.key, e.target.value)}
@@ -371,9 +492,11 @@ export function ConfigPanel() {
                   ) : (
                     <div className="relative">
                       <input
-                        type={field.kind === 'number' ? 'number' : 'text'}
+                        type={field.kind === "number" ? "number" : "text"}
                         value={getFieldValue(field.key)}
-                        onChange={(e) => setFieldValue(field.key, e.target.value)}
+                        onChange={(e) =>
+                          setFieldValue(field.key, e.target.value)
+                        }
                         className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-colors pr-12"
                       />
                       {field.unit && (
@@ -385,13 +508,13 @@ export function ConfigPanel() {
                   )}
 
                   {/* 提示文本 */}
-                  {field.reload === 'restart' && (
+                  {field.reload === "restart" && (
                     <p className="text-[10px] text-red-500/70 flex items-center gap-1">
                       <AlertTriangle className="w-2.5 h-2.5" />
                       修改此配置需要重启服务
                     </p>
                   )}
-                  {field.reload === 'yaml' && (
+                  {field.reload === "yaml" && (
                     <p className="text-[10px] text-amber-500/70 flex items-center gap-1">
                       <Info className="w-2.5 h-2.5" />
                       配置将写入 YAML 文件，需重启后生效
@@ -429,7 +552,7 @@ export function ConfigPanel() {
             className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium rounded-lg bg-indigo-500 text-white hover:bg-indigo-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             <Save className="w-3.5 h-3.5" />
-            {saving ? '保存中...' : '保存'}
+            {saving ? "保存中..." : "保存"}
           </button>
         </div>
       </div>

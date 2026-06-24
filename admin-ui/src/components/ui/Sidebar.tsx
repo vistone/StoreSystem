@@ -2,21 +2,20 @@
 // 侧边栏导航
 // ============================================================
 
-'use client';
+"use client";
 
 import {
   Network,
   Table2,
   FileText,
-  GitBranch,
   HardDrive,
   Settings,
   Wifi,
   WifiOff,
-} from 'lucide-react';
-import { useClusterStore } from '@/stores/cluster-store';
+} from "lucide-react";
+import { useClusterStore } from "@/stores/cluster-store";
 
-export type TabId = 'workflow' | 'workers' | 'logs' | 'routes' | 'pending' | 'settings';
+export type TabId = "workflow" | "workers" | "logs" | "pending" | "settings";
 
 interface SidebarProps {
   activeTab: TabId;
@@ -24,12 +23,11 @@ interface SidebarProps {
 }
 
 const tabs: { id: TabId; label: string; icon: any }[] = [
-  { id: 'workflow', label: '工作流', icon: Network },
-  { id: 'workers', label: 'Worker 列表', icon: Table2 },
-  { id: 'logs', label: '日志', icon: FileText },
-  { id: 'routes', label: '路由规则', icon: GitBranch },
-  { id: 'pending', label: 'Pending', icon: HardDrive },
-  { id: 'settings', label: '设置', icon: Settings },
+  { id: "workflow", label: "工作流", icon: Network },
+  { id: "workers", label: "Worker 列表", icon: Table2 },
+  { id: "logs", label: "日志", icon: FileText },
+  { id: "pending", label: "Pending", icon: HardDrive },
+  { id: "settings", label: "设置", icon: Settings },
 ];
 
 export function Sidebar({ activeTab, onTabChange }: SidebarProps) {
@@ -57,12 +55,14 @@ export function Sidebar({ activeTab, onTabChange }: SidebarProps) {
               onClick={() => onTabChange(tab.id)}
               className={`w-full flex items-center justify-center lg:justify-start gap-3 px-3 lg:px-4 py-2.5 transition-colors ${
                 isActive
-                  ? 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 border-r-2 border-indigo-500'
-                  : 'text-gray-500 hover:bg-gray-50 dark:hover:bg-gray-700/50'
+                  ? "bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 border-r-2 border-indigo-500"
+                  : "text-gray-500 hover:bg-gray-50 dark:hover:bg-gray-700/50"
               }`}
             >
               <tab.icon className="w-5 h-5 flex-shrink-0" />
-              <span className="hidden lg:block text-sm font-medium">{tab.label}</span>
+              <span className="hidden lg:block text-sm font-medium">
+                {tab.label}
+              </span>
             </button>
           );
         })}
@@ -77,7 +77,7 @@ export function Sidebar({ activeTab, onTabChange }: SidebarProps) {
             <WifiOff className="w-3.5 h-3.5 text-red-500" />
           )}
           <span className="hidden lg:block text-[10px] text-gray-400">
-            {wsConnected ? '实时连接' : '已断开'}
+            {wsConnected ? "实时连接" : "已断开"}
           </span>
         </div>
       </div>

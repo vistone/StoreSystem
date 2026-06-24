@@ -2,23 +2,22 @@
 // 主仪表盘 - 管理界面核心布局
 // ============================================================
 
-'use client';
+"use client";
 
-import { useState } from 'react';
-import { Sidebar, TabId } from '@/components/ui/Sidebar';
-import { OverviewPanel } from '@/components/panels/OverviewPanel';
-import { ClusterWorkflow } from '@/components/workflow/ClusterWorkflow';
-import { WorkerDetailPanel } from '@/components/panels/WorkerDetailPanel';
-import { LogPanel } from '@/components/panels/LogPanel';
-import { RoutePanel } from '@/components/panels/RoutePanel';
-import { ConfigPanel } from '@/components/panels/ConfigPanel';
-import { PendingPanel } from '@/components/panels/PendingPanel';
-import { useWebSocket } from '@/hooks/useWebSocket';
-import { useClusterStore } from '@/stores/cluster-store';
-import { Wifi, WifiOff } from 'lucide-react';
+import { useState } from "react";
+import { Sidebar, TabId } from "@/components/ui/Sidebar";
+import { OverviewPanel } from "@/components/panels/OverviewPanel";
+import { ClusterWorkflow } from "@/components/workflow/ClusterWorkflow";
+import { WorkerDetailPanel } from "@/components/panels/WorkerDetailPanel";
+import { LogPanel } from "@/components/panels/LogPanel";
+import { ConfigPanel } from "@/components/panels/ConfigPanel";
+import { PendingPanel } from "@/components/panels/PendingPanel";
+import { useWebSocket } from "@/hooks/useWebSocket";
+import { useClusterStore } from "@/stores/cluster-store";
+import { Wifi, WifiOff } from "lucide-react";
 
 export function Dashboard() {
-  const [activeTab, setActiveTab] = useState<TabId>('workflow');
+  const [activeTab, setActiveTab] = useState<TabId>("workflow");
   const { autoRefresh, setAutoRefresh, wsConnected } = useClusterStore();
 
   // 启动 WebSocket 实时连接
@@ -35,12 +34,11 @@ export function Dashboard() {
         <header className="h-14 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 lg:px-6">
           <div className="flex items-center gap-3">
             <h1 className="text-lg font-bold text-gray-800 dark:text-gray-200">
-              {activeTab === 'workflow' && '集群工作流'}
-              {activeTab === 'workers' && 'Worker 节点列表'}
-              {activeTab === 'logs' && '实时日志'}
-              {activeTab === 'routes' && '路由规则'}
-              {activeTab === 'pending' && '待处理缓存'}
-              {activeTab === 'settings' && '设置'}
+              {activeTab === "workflow" && "集群工作流"}
+              {activeTab === "workers" && "Worker 节点列表"}
+              {activeTab === "logs" && "实时日志"}
+              {activeTab === "pending" && "待处理缓存"}
+              {activeTab === "settings" && "设置"}
             </h1>
           </div>
 
@@ -51,12 +49,12 @@ export function Dashboard() {
               <button
                 onClick={() => setAutoRefresh(!autoRefresh)}
                 className={`relative w-8 h-4 rounded-full transition-colors ${
-                  autoRefresh ? 'bg-indigo-500' : 'bg-gray-300 dark:bg-gray-600'
+                  autoRefresh ? "bg-indigo-500" : "bg-gray-300 dark:bg-gray-600"
                 }`}
               >
                 <div
                   className={`absolute top-0.5 w-3 h-3 bg-white rounded-full shadow transition-transform ${
-                    autoRefresh ? 'translate-x-4' : 'translate-x-0.5'
+                    autoRefresh ? "translate-x-4" : "translate-x-0.5"
                   }`}
                 />
               </button>
@@ -67,7 +65,9 @@ export function Dashboard() {
               {wsConnected ? (
                 <>
                   <Wifi className="w-3 h-3 text-green-500" />
-                  <span className="text-green-600 dark:text-green-400">已连接</span>
+                  <span className="text-green-600 dark:text-green-400">
+                    已连接
+                  </span>
                 </>
               ) : (
                 <>
@@ -81,7 +81,7 @@ export function Dashboard() {
 
         {/* 内容区 */}
         <main className="flex-1 overflow-hidden">
-          {activeTab === 'workflow' && (
+          {activeTab === "workflow" && (
             <div className="h-full flex flex-col">
               {/* 概览卡片 */}
               <div className="flex-shrink-0 p-3 lg:p-4">
@@ -96,31 +96,25 @@ export function Dashboard() {
             </div>
           )}
 
-          {activeTab === 'workers' && (
+          {activeTab === "workers" && (
             <div className="h-full p-3 lg:p-4">
               <WorkerDetailPanel />
             </div>
           )}
 
-          {activeTab === 'logs' && (
+          {activeTab === "logs" && (
             <div className="h-full p-3 lg:p-4">
               <LogPanel />
             </div>
           )}
 
-          {activeTab === 'routes' && (
-            <div className="h-full p-3 lg:p-4">
-              <RoutePanel />
-            </div>
-          )}
-
-          {activeTab === 'pending' && (
+          {activeTab === "pending" && (
             <div className="h-full p-3 lg:p-4">
               <PendingPanel />
             </div>
           )}
 
-          {activeTab === 'settings' && (
+          {activeTab === "settings" && (
             <div className="h-full p-3 lg:p-4">
               <ConfigPanel />
             </div>
