@@ -197,10 +197,14 @@ mod tests {
     use super::*;
 
     fn test_config() -> QuadShardConfig {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("quad_test_{}_{}", std::process::id(), id));
         QuadShardConfig {
             base_level: 8,
             split_level: 18,
-            data_dir: "/tmp/quad_test".to_string(),
+            data_dir: dir.to_string_lossy().to_string(),
             kv_ext: ".kv".to_string(),
             meta_ext: ".db".to_string(),
             cache_size: 100,
@@ -249,9 +253,6 @@ mod tests {
         let (read_val, read_meta) = mgr.get("v1", "302112345678", 12, key).unwrap();
         assert_eq!(read_val, value);
         assert_eq!(read_meta.key, key);
-
-        // 清理测试数据
-        let _ = std::fs::remove_dir_all("/tmp/quad_test");
     }
 
     #[test]
@@ -267,8 +268,5 @@ mod tests {
         let (v2, _) = mgr.get("v1", "99999", 3, "k2").unwrap();
         assert_eq!(v1, Bytes::from("v1"));
         assert_eq!(v2, Bytes::from("v2"));
-
-        // 清理测试数据
-        let _ = std::fs::remove_dir_all("/tmp/quad_test");
     }
 }
