@@ -28,3 +28,4 @@ Thumbs.db
 
 # 日志
 *.log
+standalone_test.yaml
