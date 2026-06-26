@@ -243,8 +243,8 @@ impl ShardManager {
                 for entry in wal_entries {
                     match entry.op_type.as_str() {
                         "put" => {
-                            if shard.kv_store.exists(&entry.key).unwrap_or(false) {
-                                if let Some(ref json) = entry.meta_json {
+                            if let Some(ref json) = entry.meta_json {
+                                if shard.kv_store.exists(&entry.key).unwrap_or(false) {
                                     if let Ok(m) = serde_json::from_str::<ObjectMeta>(json) {
                                         let _ = shard.meta_store.put(&m);
                                     }

@@ -122,8 +122,12 @@ async fn run_master(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>
         loop {
             tokio::time::sleep(pending_gc_interval).await;
             for region in &["0", "1", "2", "3"] {
-                let _ = pending_master.pending_store.revert_stale_flushing(region, pending_flush_timeout);
-                let _ = pending_master.pending_store.gc_done(region, pending_flush_timeout);
+                let _ = pending_master
+                    .pending_store
+                    .revert_stale_flushing(region, pending_flush_timeout);
+                let _ = pending_master
+                    .pending_store
+                    .gc_done(region, pending_flush_timeout);
             }
         }
     });
@@ -238,18 +242,19 @@ async fn run_worker(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>
     };
 
     // 用 Master 下发的配置构建 WorkerConfig
-    let quad_shard_config = proto_config
-        .quad_shard
-        .as_ref()
-        .map(|qs| store_system::config::QuadShardConfig {
-            base_level: qs.base_level,
-            split_level: qs.split_level,
-            data_dir: qs.data_dir.clone(),
-            kv_ext: qs.kv_ext.clone(),
-            meta_ext: qs.meta_ext.clone(),
-            cache_size: qs.cache_size as usize,
-            flush_interval_ms: qs.flush_interval_ms,
-        });
+    let quad_shard_config =
+        proto_config
+            .quad_shard
+            .as_ref()
+            .map(|qs| store_system::config::QuadShardConfig {
+                base_level: qs.base_level,
+                split_level: qs.split_level,
+                data_dir: qs.data_dir.clone(),
+                kv_ext: qs.kv_ext.clone(),
+                meta_ext: qs.meta_ext.clone(),
+                cache_size: qs.cache_size as usize,
+                flush_interval_ms: qs.flush_interval_ms,
+            });
 
     let kv_path = format!("{}/kv{}", wc.data_dir, proto_config.kv_ext);
     let meta_path = format!("{}/meta{}", wc.data_dir, proto_config.meta_ext);
@@ -361,12 +366,9 @@ async fn run_worker(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>
                         .get("cache_size")
                         .and_then(|n| n.as_u64())
                         .map(|n| n as usize);
-                    let flush_interval_ms = v
-                        .get("flush_interval_ms")
-                        .and_then(|n| n.as_u64());
-                    let heartbeat_interval_secs = v
-                        .get("heartbeat_interval_secs")
-                        .and_then(|n| n.as_u64());
+                    let flush_interval_ms = v.get("flush_interval_ms").and_then(|n| n.as_u64());
+                    let heartbeat_interval_secs =
+                        v.get("heartbeat_interval_secs").and_then(|n| n.as_u64());
                     let weight = v.get("weight").and_then(|n| n.as_i64()).map(|n| n as i32);
                     logger_node.update_performance_config(
                         cache_size,

@@ -42,13 +42,27 @@ impl Default for GuardianSettings {
     }
 }
 
-fn default_probe_interval() -> u64 { 5 }
-fn default_probe_timeout() -> u64 { 3 }
-fn default_failure_threshold() -> u32 { 3 }
-fn default_backoff_base() -> u64 { 1 }
-fn default_backoff_max() -> u64 { 60 }
-fn default_cooldown_after() -> u32 { 10 }
-fn default_cooldown_secs() -> u64 { 300 }
+fn default_probe_interval() -> u64 {
+    5
+}
+fn default_probe_timeout() -> u64 {
+    3
+}
+fn default_failure_threshold() -> u32 {
+    3
+}
+fn default_backoff_base() -> u64 {
+    1
+}
+fn default_backoff_max() -> u64 {
+    60
+}
+fn default_cooldown_after() -> u32 {
+    10
+}
+fn default_cooldown_secs() -> u64 {
+    300
+}
 
 /// 单个进程配置
 #[derive(Debug, Clone, Serialize, Deserialize)]

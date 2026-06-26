@@ -481,12 +481,9 @@ impl GrpcClient {
                         ..Default::default()
                     });
                     let s = Instant::now();
-                    match client.get(req).await {
-                        Ok(_) => {
-                            latencies.push(s.elapsed().as_secs_f64() * 1000.0);
-                            success += 1;
-                        }
-                        Err(_) => {}
+                    if client.get(req).await.is_ok() {
+                        latencies.push(s.elapsed().as_secs_f64() * 1000.0);
+                        success += 1;
                     }
                 }
                 ("read", latencies, success)
@@ -513,12 +510,9 @@ impl GrpcClient {
                         ..Default::default()
                     });
                     let s = Instant::now();
-                    match client.put(req).await {
-                        Ok(_) => {
-                            latencies.push(s.elapsed().as_secs_f64() * 1000.0);
-                            success += 1;
-                        }
-                        Err(_) => {}
+                    if client.put(req).await.is_ok() {
+                        latencies.push(s.elapsed().as_secs_f64() * 1000.0);
+                        success += 1;
                     }
                 }
                 ("write", latencies, success)
@@ -585,13 +579,13 @@ impl GrpcClient {
         for w in 0..concurrency {
             let mut client = client.clone();
             let value = value.clone();
-            let end = end;
+
             let total_count = total_count.clone();
             let total_bytes = total_bytes.clone();
             handles.push(tokio::spawn(async move {
                 let mut i = 0u64;
                 while Instant::now() < end {
-                    let region = regions[(w as usize + i as usize) % 4];
+                    let region = regions[(w + i as usize) % 4];
                     let key = format!("stab_{}_{}", w, i);
                     let req = tonic::Request::new(PutRequest {
                         key,
@@ -602,12 +596,9 @@ impl GrpcClient {
                         level: 10,
                         ..Default::default()
                     });
-                    match client.put(req).await {
-                        Ok(_) => {
-                            total_count.fetch_add(1, Ordering::Relaxed);
-                            total_bytes.fetch_add(value_size as u64, Ordering::Relaxed);
-                        }
-                        Err(_) => {}
+                    if client.put(req).await.is_ok() {
+                        total_count.fetch_add(1, Ordering::Relaxed);
+                        total_bytes.fetch_add(value_size as u64, Ordering::Relaxed);
                     }
                     i += 1;
                 }

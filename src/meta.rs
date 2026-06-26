@@ -250,7 +250,7 @@ impl MetaStore {
     /// 批量写入 WAL 意图记录（在写 KV 之前调用）
     pub fn write_wal_batch(
         &self,
-        puts: &[(String, String)],  // (key, meta_json)
+        puts: &[(String, String)], // (key, meta_json)
         deletes: &[String],
     ) -> Result<()> {
         if puts.is_empty() && deletes.is_empty() {
@@ -281,11 +281,7 @@ impl MetaStore {
 
     /// 提交 Meta 写入并原子地清除 WAL（在写 KV 之后调用）
     /// 一个事务内完成：写所有 Meta 记录 + 删除所有 WAL 条目
-    pub fn commit_meta_clear_wal(
-        &self,
-        puts: &[ObjectMeta],
-        del_keys: &[String],
-    ) -> Result<()> {
+    pub fn commit_meta_clear_wal(&self, puts: &[ObjectMeta], del_keys: &[String]) -> Result<()> {
         let conn = self.conn.lock().map_err(|_| {
             crate::error::StoreError::InvalidArgument("MetaStore mutex poisoned".to_string())
         })?;
@@ -307,10 +303,7 @@ impl MetaStore {
             )?;
         }
         for key in del_keys {
-            tx.execute(
-                "DELETE FROM write_intent_wal WHERE key = ?1",
-                params![key],
-            )?;
+            tx.execute("DELETE FROM write_intent_wal WHERE key = ?1", params![key])?;
         }
 
         tx.commit()?;
@@ -322,10 +315,7 @@ impl MetaStore {
         let conn = self.conn.lock().map_err(|_| {
             crate::error::StoreError::InvalidArgument("MetaStore mutex poisoned".to_string())
         })?;
-        conn.execute(
-            "DELETE FROM write_intent_wal WHERE key = ?1",
-            params![key],
-        )?;
+        conn.execute("DELETE FROM write_intent_wal WHERE key = ?1", params![key])?;
         Ok(())
     }
 

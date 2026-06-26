@@ -1,9 +1,9 @@
 use crate::error::{Result, StoreError};
 use crate::grpc::proto;
 use crate::master_http::WorkerHttpClient;
+use crate::master_log_ws::ConfigBroadcaster;
 use crate::master_store::MasterStore;
 use crate::master_ws::WorkerWsClient;
-use crate::master_log_ws::ConfigBroadcaster;
 use crate::meta::ObjectMeta;
 use crate::pending_store::PendingStore;
 use bytes::Bytes;
@@ -274,7 +274,8 @@ impl MasterNode {
 
     /// 获取当前配置版本号
     pub fn config_version(&self) -> u64 {
-        self.config_version.load(std::sync::atomic::Ordering::Relaxed)
+        self.config_version
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// 递增配置版本号（配置变更后调用）
@@ -298,16 +299,12 @@ impl MasterNode {
         _client_region: &str,
     ) -> Result<WorkerConfigPayload> {
         // 1. 查 worker_regions 获取 region，找不到则拒绝注册
-        let region = self
-            .worker_regions
-            .get(worker_id)
-            .cloned()
-            .ok_or_else(|| {
-                StoreError::InvalidArgument(format!(
-                    "Worker '{}' 未在 master.yaml 的 worker_regions 中配置，拒绝注册",
-                    worker_id
-                ))
-            })?;
+        let region = self.worker_regions.get(worker_id).cloned().ok_or_else(|| {
+            StoreError::InvalidArgument(format!(
+                "Worker '{}' 未在 master.yaml 的 worker_regions 中配置，拒绝注册",
+                worker_id
+            ))
+        })?;
 
         // 2. 写入 SQLite 持久化（用 spawn_blocking 包装同步 I/O）
         let store = self.store.clone();
@@ -526,7 +523,7 @@ impl MasterNode {
                 (seahash::hash(input.as_bytes()), *w)
             })
             .collect();
-        scored.sort_by(|a, b| b.0.cmp(&a.0)); // 降序：hash 最大在前
+        scored.sort_by_key(|b| std::cmp::Reverse(b.0)); // 降序：hash 最大在前
 
         let primary = scored[0].1.clone();
         let secondary = if scored.len() > 1 {

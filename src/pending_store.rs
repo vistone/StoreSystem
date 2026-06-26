@@ -90,9 +90,9 @@ impl PendingStore {
         let regions = self.regions.lock().map_err(|_| {
             StoreError::InvalidArgument("PendingStore regions mutex poisoned".to_string())
         })?;
-        let store = regions.get(region).ok_or_else(|| {
-            StoreError::InvalidArgument(format!("region {} not found", region))
-        })?;
+        let store = regions
+            .get(region)
+            .ok_or_else(|| StoreError::InvalidArgument(format!("region {} not found", region)))?;
 
         let now = Utc::now().to_rfc3339();
         let size = value.len() as i64;
@@ -131,9 +131,7 @@ impl PendingStore {
         let tx = store.kv.tx(false)?;
         let bucket = tx.get_bucket(KV_BUCKET)?;
         match bucket.get(key) {
-            Some(data) if data.is_kv() => {
-                Ok(Some(Bytes::copy_from_slice(data.kv().value())))
-            }
+            Some(data) if data.is_kv() => Ok(Some(Bytes::copy_from_slice(data.kv().value()))),
             _ => Ok(None),
         }
     }
@@ -149,14 +147,20 @@ impl PendingStore {
             None => return Ok(Vec::new()),
         };
 
-        let placeholders: Vec<String> = statuses.iter().enumerate().map(|(i, _)| format!("?{}", i + 1)).collect();
+        let placeholders: Vec<String> = statuses
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("?{}", i + 1))
+            .collect();
         let sql = format!(
             "SELECT key, size, created_at, status, attempt FROM pending_entries WHERE status IN ({})",
             placeholders.join(",")
         );
         let mut stmt = store.meta.prepare(&sql)?;
-        let params_refs: Vec<&dyn rusqlite::types::ToSql> =
-            statuses.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+        let params_refs: Vec<&dyn rusqlite::types::ToSql> = statuses
+            .iter()
+            .map(|s| s as &dyn rusqlite::types::ToSql)
+            .collect();
         let entries = stmt.query_map(params_refs.as_slice(), |row| {
             Ok(PendingEntry {
                 key: row.get(0)?,
@@ -221,7 +225,7 @@ impl PendingStore {
         // 查询待删除的 key
         let cutoff = Utc::now()
             .checked_sub_signed(chrono::Duration::seconds(retention_secs as i64))
-            .unwrap_or_else(|| Utc::now())
+            .unwrap_or_else(Utc::now)
             .to_rfc3339();
 
         let mut stmt = store.meta.prepare(
@@ -242,10 +246,9 @@ impl PendingStore {
             let tx = store.kv.tx(true)?;
             let bucket = tx.get_bucket(KV_BUCKET)?;
             for key in &keys {
-                store.meta.execute(
-                    "DELETE FROM pending_entries WHERE key = ?1",
-                    params![key],
-                )?;
+                store
+                    .meta
+                    .execute("DELETE FROM pending_entries WHERE key = ?1", params![key])?;
                 let _ = bucket.delete(key);
             }
             tx.commit()?;
@@ -267,7 +270,7 @@ impl PendingStore {
 
         let cutoff = Utc::now()
             .checked_sub_signed(chrono::Duration::seconds(timeout_secs as i64))
-            .unwrap_or_else(|| Utc::now())
+            .unwrap_or_else(Utc::now)
             .to_rfc3339();
 
         let now = Utc::now().to_rfc3339();

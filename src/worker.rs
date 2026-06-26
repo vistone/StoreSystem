@@ -990,7 +990,7 @@ fn recover_from_wal(
 /// 原子刷盘：WAL → KV → Meta（原子清除 WAL）
 /// 三步协议保证崩溃安全：
 ///   1. 写 WAL（意图日志）→ 2. 写 KV → 3. 写 Meta + 清除 WAL
-/// 任意步骤崩溃后，重启时 recover_from_wal() 会根据 WAL 补全 Meta。
+//   (任意步骤崩溃后，重启时 recover_from_wal() 会根据 WAL 补全 Meta)
 fn flush_ops(
     kv: &KvStore,
     meta: &MetaStore,

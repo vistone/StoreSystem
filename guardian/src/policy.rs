@@ -40,7 +40,11 @@ pub fn handle_dead(proc: &mut GuardedProcess, settings: &GuardianSettings) -> Op
     proc.kill();
 
     // 4. 退避等待
-    let delay = backoff_delay(proc.failures, settings.backoff_base_secs, settings.backoff_max_secs);
+    let delay = backoff_delay(
+        proc.failures,
+        settings.backoff_base_secs,
+        settings.backoff_max_secs,
+    );
     eprintln!(
         "[guardian] {} 退避等待 {}s 后重启 (failures={})",
         proc.name,

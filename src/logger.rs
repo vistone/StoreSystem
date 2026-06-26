@@ -552,9 +552,9 @@ pub struct WorkerLogger {
     ws_sink: tokio::sync::Mutex<Option<WsSink>>,
     /// 配置更新回调（Master 推送 config_update 消息时触发）
     /// 使用 std::sync::Mutex 因为只在构造时写一次，之后只读
-    config_update_handler: std::sync::Arc<
-        std::sync::Mutex<Option<Box<dyn Fn(String) + Send + Sync>>>,
-    >,
+    #[allow(clippy::type_complexity)]
+    config_update_handler:
+        std::sync::Arc<std::sync::Mutex<Option<Box<dyn Fn(String) + Send + Sync>>>>,
 }
 
 impl WorkerLogger {
@@ -788,14 +788,15 @@ impl WorkerLogger {
                         match msg {
                             Ok(tokio_tungstenite::tungstenite::Message::Text(text)) => {
                                 // 检查是否为 config_update 消息
-                                let is_config_update = serde_json::from_str::<serde_json::Value>(&text)
-                                    .ok()
-                                    .and_then(|v| {
-                                        v.get("type")
-                                            .and_then(|t| t.as_str())
-                                            .map(|s| s == "config_update")
-                                    })
-                                    .unwrap_or(false);
+                                let is_config_update =
+                                    serde_json::from_str::<serde_json::Value>(&text)
+                                        .ok()
+                                        .and_then(|v| {
+                                            v.get("type")
+                                                .and_then(|t| t.as_str())
+                                                .map(|s| s == "config_update")
+                                        })
+                                        .unwrap_or(false);
 
                                 if is_config_update {
                                     if let Some(handler) =

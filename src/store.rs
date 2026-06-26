@@ -109,9 +109,7 @@ impl Store {
     pub fn open<P: AsRef<Path>>(kv_path: P, meta_path: P, cache_size: usize) -> Result<Self> {
         let kv_store = Arc::new(KvStore::open(kv_path)?);
         let meta_store = Arc::new(MetaStore::open(meta_path)?);
-        let cache = MokaCache::builder()
-            .max_capacity(cache_size as u64)
-            .build();
+        let cache = MokaCache::builder().max_capacity(cache_size as u64).build();
         let write_buffer = Arc::new(WriteBuffer::new());
 
         Ok(Self {
@@ -374,7 +372,10 @@ fn flush_ops(
 
     for (key, op) in ops {
         match op {
-            PendingOp::Put { value, meta: obj_meta } => {
+            PendingOp::Put {
+                value,
+                meta: obj_meta,
+            } => {
                 put_kvs.push((key, value));
                 put_metas.push(obj_meta);
             }

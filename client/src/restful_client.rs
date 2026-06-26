@@ -324,7 +324,7 @@ impl RestfulClient {
             let http = Client::new();
             let base_url = base_url.clone();
             let value = value.clone();
-            let end = end;
+
             let total_count = total_count.clone();
             let total_bytes = total_bytes.clone();
             handles.push(tokio::spawn(async move {
@@ -336,12 +336,9 @@ impl RestfulClient {
                         "{}/{}?content_type=text/plain&quadkey={}&level=10",
                         base_url, key, quadkey
                     );
-                    match http.post(&url).body(value.clone()).send().await {
-                        Ok(_) => {
-                            total_count.fetch_add(1, Ordering::Relaxed);
-                            total_bytes.fetch_add(value_size as u64, Ordering::Relaxed);
-                        }
-                        Err(_) => {}
+                    if http.post(&url).body(value.clone()).send().await.is_ok() {
+                        total_count.fetch_add(1, Ordering::Relaxed);
+                        total_bytes.fetch_add(value_size as u64, Ordering::Relaxed);
                     }
                     i += 1;
                 }

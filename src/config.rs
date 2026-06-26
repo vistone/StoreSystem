@@ -683,9 +683,18 @@ worker_regions:
   worker-3: "3"
 "#;
         let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(config.worker_regions.get("worker-0"), Some(&"0".to_string()));
-        assert_eq!(config.worker_regions.get("worker-1"), Some(&"1".to_string()));
-        assert_eq!(config.worker_regions.get("worker-3"), Some(&"3".to_string()));
+        assert_eq!(
+            config.worker_regions.get("worker-0"),
+            Some(&"0".to_string())
+        );
+        assert_eq!(
+            config.worker_regions.get("worker-1"),
+            Some(&"1".to_string())
+        );
+        assert_eq!(
+            config.worker_regions.get("worker-3"),
+            Some(&"3".to_string())
+        );
     }
 
     #[test]

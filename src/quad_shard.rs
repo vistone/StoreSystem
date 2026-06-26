@@ -12,7 +12,7 @@ use std::sync::Arc;
 /// 根据 quadkey 的层级（level）自动路由数据到不同的 DB 文件：
 /// - level ≤ base_level(默认8) → 所有数据存入 "base" DB
 /// - base_level < level < split_level(默认18) → 按 quadkey 前 4 位分片
-/// level ≥ split_level → 按 quadkey 前 8 位分片
+///   level ≥ split_level → 按 quadkey 前 8 位分片
 #[derive(Debug)]
 pub struct QuadShardManager {
     config: QuadShardConfig,
@@ -119,6 +119,7 @@ impl QuadShardManager {
     }
 
     /// 写入对象
+    #[allow(clippy::too_many_arguments)]
     pub fn put(
         &self,
         epoch: &str,

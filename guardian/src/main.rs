@@ -1,12 +1,12 @@
 mod config;
-mod process;
-mod prober;
 mod policy;
+mod prober;
+mod process;
 
 use config::GuardianConfig;
-use process::{GuardedProcess, ProcessState};
-use prober::{ProbeResult, probe_master, probe_worker};
 use policy::handle_dead;
+use prober::{probe_master, probe_worker, ProbeResult};
+use process::{GuardedProcess, ProcessState};
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -77,10 +77,7 @@ async fn main() -> anyhow::Result<()> {
         // 等待依赖进程 Running
         if let Some(ref dep) = proc.config.depends_on {
             if let Some(dep_proc) = guarded.get(dep) {
-                eprintln!(
-                    "[guardian] {} 等待依赖 {} 就绪...",
-                    name, dep
-                );
+                eprintln!("[guardian] {} 等待依赖 {} 就绪...", name, dep);
                 wait_for_running(dep_proc, &settings).await;
             }
         }
@@ -147,7 +144,9 @@ async fn main() -> anyhow::Result<()> {
                     proc.state = ProcessState::Running;
                     proc.failures = 0;
                 }
-                result @ (ProbeResult::Degraded(_) | ProbeResult::ConnectionRefused | ProbeResult::Timeout) => {
+                result @ (ProbeResult::Degraded(_)
+                | ProbeResult::ConnectionRefused
+                | ProbeResult::Timeout) => {
                     proc.failures = proc.failures.saturating_add(1);
                     proc.last_failure = Some(std::time::Instant::now());
                     let desc = match &result {
@@ -198,7 +197,7 @@ fn topological_sort(processes: &BTreeMap<String, config::ProcessConfig>) -> Vec<
             .iter()
             .filter(|(_, dep)| {
                 // 无依赖 或 依赖已在 ordered 中
-                dep.as_ref().map_or(true, |d| ordered.contains(d))
+                dep.as_ref().is_none_or(|d| ordered.contains(d))
             })
             .map(|(k, _)| k.clone())
             .collect();
@@ -206,7 +205,7 @@ fn topological_sort(processes: &BTreeMap<String, config::ProcessConfig>) -> Vec<
         if ready.is_empty() {
             eprintln!("[guardian] 警告: 检测到循环依赖");
             // 按字母序加入剩余
-            for (k, _) in &remaining {
+            for k in remaining.keys() {
                 ordered.push(k.clone());
             }
             break;
@@ -222,20 +221,14 @@ fn topological_sort(processes: &BTreeMap<String, config::ProcessConfig>) -> Vec<
 }
 
 /// 等待进程变为 Running 状态
-async fn wait_for_running(
-    proc: &GuardedProcess,
-    settings: &config::GuardianSettings,
-) {
+async fn wait_for_running(proc: &GuardedProcess, settings: &config::GuardianSettings) {
     let is_master = proc.name == "master";
     let timeout = settings.probe_timeout_secs;
 
     for attempt in 0..30 {
         if let Some(pid) = proc.pid {
             if !std::path::Path::new(&format!("/proc/{}", pid)).exists() {
-                eprintln!(
-                    "[guardian] {} PID={} 已退出",
-                    proc.name, pid
-                );
+                eprintln!("[guardian] {} PID={} 已退出", proc.name, pid);
                 return;
             }
         }
@@ -261,7 +254,8 @@ async fn wait_for_running(
         if attempt % 5 == 0 {
             eprintln!(
                 "[guardian] 等待 {} 健康... (尝试 {}/30)",
-                proc.name, attempt + 1
+                proc.name,
+                attempt + 1
             );
         }
         tokio::time::sleep(Duration::from_secs(1)).await;

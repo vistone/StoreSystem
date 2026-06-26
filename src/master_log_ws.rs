@@ -134,18 +134,16 @@ async fn handle_connection(
                         }
 
                         // === register: 首条注册消息 ===
-                        if worker_id_registered.is_none() {
-                            if action == "register" {
-                                if let Some(wid) = v.get("worker_id").and_then(|w| w.as_str()) {
-                                    let wid = wid.to_string();
-                                    broadcaster.register(wid.clone(), config_tx.clone());
-                                    worker_id_registered = Some(wid);
-                                    let ack = r#"{"status":"ok","message":"registered"}"#;
-                                    if write.send(Message::Text(ack.to_string())).await.is_err() {
-                                        break;
-                                    }
-                                    continue;
+                        if worker_id_registered.is_none() && action == "register" {
+                            if let Some(wid) = v.get("worker_id").and_then(|w| w.as_str()) {
+                                let wid = wid.to_string();
+                                broadcaster.register(wid.clone(), config_tx.clone());
+                                worker_id_registered = Some(wid);
+                                let ack = r#"{"status":"ok","message":"registered"}"#;
+                                if write.send(Message::Text(ack.to_string())).await.is_err() {
+                                    break;
                                 }
+                                continue;
                             }
                         }
 
@@ -234,11 +232,7 @@ async fn handle_pending_pull(
             "seq": seq + 1,
         });
 
-        if write
-            .send(Message::Text(msg.to_string()))
-            .await
-            .is_err()
-        {
+        if write.send(Message::Text(msg.to_string())).await.is_err() {
             // 推送中断，已标记为 flushing 的条目会由 GC 超时回退
             return;
         }
@@ -408,9 +402,7 @@ impl ConfigBroadcaster {
     /// 向所有 Worker 广播配置更新
     pub fn broadcast_all(&self, config_json: &str) {
         for entry in self.senders.iter() {
-            let _ = entry
-                .value()
-                .send(Message::Text(config_json.to_string()));
+            let _ = entry.value().send(Message::Text(config_json.to_string()));
         }
     }
 
@@ -445,10 +437,8 @@ mod tests {
 
         assert_eq!(broadcaster.len(), 1);
 
-        broadcaster.broadcast_config_update(
-            "worker-0",
-            r#"{"type":"config_update","config_version":2}"#,
-        );
+        broadcaster
+            .broadcast_config_update("worker-0", r#"{"type":"config_update","config_version":2}"#);
 
         let msg = rx.recv().await.expect("should receive message");
         match msg {
