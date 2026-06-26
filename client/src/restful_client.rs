@@ -3,9 +3,11 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
+#[allow(dead_code)]
 use crate::grpc_client::key_to_quadkey;
 
 #[derive(Debug, Serialize)]
+#[allow(dead_code)]
 struct BatchItemReq {
     key: String,
     value: String,
@@ -14,11 +16,13 @@ struct BatchItemReq {
 }
 
 #[derive(Debug, Serialize)]
+#[allow(dead_code)]
 struct PutBatchReq {
     items: Vec<BatchItemReq>,
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct PutResp {
     #[allow(dead_code)]
     meta: serde_json::Value,
@@ -32,12 +36,15 @@ struct GetResp {
     value: String,
 }
 
+#[allow(dead_code)]
 pub struct RestfulClient {
     base_url: String,
     http: Client,
 }
 
+#[allow(dead_code)]
 impl RestfulClient {
+    #[allow(dead_code)]
     pub fn new(base_url: &str, data_type: &str) -> Self {
         let base = format!("{}/{}", base_url.trim_end_matches('/'), data_type);
         Self {
@@ -96,10 +103,7 @@ impl RestfulClient {
     /// 读取单条记录
     pub async fn get_single(&self, key: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         let quadkey = key_to_quadkey(key);
-        let url = format!(
-            "{}/{}?quadkey={}&level=10",
-            self.base_url, key, quadkey
-        );
+        let url = format!("{}/{}?quadkey={}&level=10", self.base_url, key, quadkey);
         let resp = self.http.get(&url).send().await?;
         if resp.status().is_success() {
             let r: GetResp = resp.json().await?;
@@ -129,10 +133,7 @@ impl RestfulClient {
         for i in 0..rounds {
             let key = format!("rest_get_{}", i);
             let quadkey = key_to_quadkey(&key);
-            let url = format!(
-                "{}/{}?quadkey={}&level=10",
-                self.base_url, key, quadkey
-            );
+            let url = format!("{}/{}?quadkey={}&level=10", self.base_url, key, quadkey);
             let start = Instant::now();
             let resp = self.http.get(&url).send().await?;
             if resp.status().is_success() {

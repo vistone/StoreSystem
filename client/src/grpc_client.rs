@@ -9,18 +9,21 @@ pub mod proto {
 use proto::store_service_client::StoreServiceClient;
 use proto::{GetRequest, PutRequest};
 
-/// 根据 key 生成 quadkey（取 hash 前 4 位作为区域 0/1/2/3）
+#[allow(dead_code)]
 pub fn key_to_quadkey(key: &str) -> String {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     key.hash(&mut hasher);
     let h = hasher.finish();
-    format!("{}", h % 4)
+    let region = h % 4;
+    format!("{:04}", region)
 }
 
 pub struct GrpcClient {
+    #[allow(dead_code)]
     client: StoreServiceClient<Channel>,
 }
 
+#[allow(dead_code)]
 impl GrpcClient {
     pub async fn connect(addr: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let endpoint = tonic::transport::Endpoint::from_shared(addr.to_string())?
@@ -85,14 +88,16 @@ impl GrpcClient {
         &mut self,
         count: usize,
     ) -> Result<(usize, usize), Box<dyn std::error::Error>> {
-        let regions = ["0", "1", "2", "3"];
+        let regions = ["0000", "1111", "2222", "3333"];
+        let region_names = ["0", "1", "2", "3"];
         let mut success = 0usize;
         let mut fail = 0usize;
 
-        for region in &regions {
+        for (ridx, region) in regions.iter().enumerate() {
+            let rname = region_names[ridx];
             for i in 0..count {
-                let key = format!("qrst_{}_{}", region, i);
-                let value = format!("val_{}_{}", region, i).into_bytes();
+                let key = format!("qrst_{}_{}", rname, i);
+                let value = format!("val_{}_{}", rname, i).into_bytes();
                 let req = tonic::Request::new(PutRequest {
                     key: key.clone(),
                     value,
@@ -112,10 +117,11 @@ impl GrpcClient {
             }
         }
 
-        for region in &regions {
+        for (ridx, region) in regions.iter().enumerate() {
+            let rname = region_names[ridx];
             for i in 0..count {
-                let key = format!("qrst_{}_{}", region, i);
-                let expected = format!("val_{}_{}", region, i).into_bytes();
+                let key = format!("qrst_{}_{}", rname, i);
+                let expected = format!("val_{}_{}", rname, i).into_bytes();
                 let req = tonic::Request::new(GetRequest {
                     key: key.clone(),
                     quadkey: region.to_string(),
@@ -127,12 +133,12 @@ impl GrpcClient {
                         if resp.into_inner().value == expected {
                             success += 1;
                         } else {
-                            println!("    ✗ 值不匹配 region={} key={}", region, key);
+                            println!("    ✗ 值不匹配 region={} key={}", rname, key);
                             fail += 1;
                         }
                     }
                     Err(e) => {
-                        println!("    ✗ 读取失败 region={} key={}: {}", region, key, e);
+                        println!("    ✗ 读取失败 region={} key={}: {}", rname, key, e);
                         fail += 1;
                     }
                 }
@@ -160,7 +166,10 @@ impl GrpcClient {
                 20 => "30211234567890123456",
                 _ => unreachable!(),
             };
-            println!("    level={} ({}): quadkey={}", level, level_names[idx], quadkey);
+            println!(
+                "    level={} ({}): quadkey={}",
+                level, level_names[idx], quadkey
+            );
 
             for i in 0..count {
                 let key = format!("lvl_{}_{}", level, i);

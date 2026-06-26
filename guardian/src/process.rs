@@ -13,6 +13,7 @@ pub enum ProcessState {
 }
 
 impl ProcessState {
+    #[allow(dead_code)]
     pub fn as_str(&self) -> &'static str {
         match self {
             ProcessState::Starting => "starting",
@@ -69,20 +70,14 @@ impl GuardedProcess {
         self.state = ProcessState::Starting;
         self.failures = 0;
 
-        eprintln!(
-            "[guardian] {} 已启动, PID={}",
-            self.name,
-            pid
-        );
+        eprintln!("[guardian] {} 已启动, PID={}", self.name, pid);
         Ok(())
     }
 
     /// kill -9 进程
     pub fn kill(&mut self) {
         if let Some(pid) = self.pid {
-            let _ = Command::new("kill")
-                .args(["-9", &pid.to_string()])
-                .output();
+            let _ = Command::new("kill").args(["-9", &pid.to_string()]).output();
             eprintln!("[guardian] {} (PID={}) 已强制终止", self.name, pid);
         }
         // 回收子进程

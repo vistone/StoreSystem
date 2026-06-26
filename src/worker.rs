@@ -1093,10 +1093,13 @@ impl WorkerService {
         if quadkey.is_empty() || level == 0 {
             return false;
         }
-        // level ≤ base_level(8) 时存入 base DB，不需要 quadkey 前缀
-        // level > base_level 时需要至少 4 位前缀
-        // level ≥ split_level(18) 时需要至少 8 位前缀
-        let min_len = if level >= 18 { 8 } else if level > 8 { 4 } else { 0 };
+        let min_len = if level >= 18 {
+            8
+        } else if level > 8 {
+            4
+        } else {
+            0
+        };
         quadkey.len() >= min_len
     }
 }
@@ -1293,7 +1296,13 @@ impl proto::worker_service_server::WorkerService for WorkerService {
                 .ok_or_else(|| Status::internal("QuadShardManager 未启用"))?;
             let epoch = &req.epoch;
             let metas = quad
-                .list(epoch, &req.quadkey, req.level, &req.prefix, req.limit as usize)
+                .list(
+                    epoch,
+                    &req.quadkey,
+                    req.level,
+                    &req.prefix,
+                    req.limit as usize,
+                )
                 .map_err(|e| Status::internal(e.to_string()))?;
             let proto_metas = metas.into_iter().map(Self::convert_meta).collect();
             return Ok(Response::new(proto::ListResponse { metas: proto_metas }));
@@ -1319,7 +1328,9 @@ impl proto::worker_service_server::WorkerService for WorkerService {
         let req = request.into_inner();
 
         // QuadKey 分片路由：检查第一个 item 决定是否走 quad 路由
-        if !req.items.is_empty() && Self::should_use_quadkey(&req.items[0].quadkey, req.items[0].level) {
+        if !req.items.is_empty()
+            && Self::should_use_quadkey(&req.items[0].quadkey, req.items[0].level)
+        {
             let quad = self
                 .node
                 .quad_shard

@@ -2,6 +2,7 @@ use std::time::Duration;
 
 /// 探针结果
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum ProbeResult {
     Running,
     Degraded(String),
@@ -15,11 +16,14 @@ pub async fn probe_master(grpc_addr: &str, timeout_secs: u64) -> ProbeResult {
     use crate::proto;
 
     let endpoint = match tonic::transport::Endpoint::from_shared(format!("http://{}", grpc_addr)) {
-        Ok(e) => e.timeout(Duration::from_secs(timeout_secs)).connect_timeout(Duration::from_secs(3)),
+        Ok(e) => e
+            .timeout(Duration::from_secs(timeout_secs))
+            .connect_timeout(Duration::from_secs(3)),
         Err(_) => return ProbeResult::Degraded("invalid address".into()),
     };
 
-    let mut client = match proto::store_service_client::StoreServiceClient::connect(endpoint).await {
+    let mut client = match proto::store_service_client::StoreServiceClient::connect(endpoint).await
+    {
         Ok(c) => c,
         Err(e) => {
             let msg = e.to_string();
@@ -73,21 +77,23 @@ pub async fn probe_worker(grpc_addr: &str, timeout_secs: u64) -> ProbeResult {
     use crate::proto;
 
     let endpoint = match tonic::transport::Endpoint::from_shared(format!("http://{}", grpc_addr)) {
-        Ok(e) => e.timeout(Duration::from_secs(timeout_secs)).connect_timeout(Duration::from_secs(3)),
+        Ok(e) => e
+            .timeout(Duration::from_secs(timeout_secs))
+            .connect_timeout(Duration::from_secs(3)),
         Err(_) => return ProbeResult::Degraded("invalid address".into()),
     };
 
-    let mut client = match proto::worker_service_client::WorkerServiceClient::connect(endpoint).await
-    {
-        Ok(c) => c,
-        Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("refused") || msg.contains("Connection refused") {
-                return ProbeResult::ConnectionRefused;
+    let mut client =
+        match proto::worker_service_client::WorkerServiceClient::connect(endpoint).await {
+            Ok(c) => c,
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("refused") || msg.contains("Connection refused") {
+                    return ProbeResult::ConnectionRefused;
+                }
+                return ProbeResult::Degraded(msg);
             }
-            return ProbeResult::Degraded(msg);
-        }
-    };
+        };
 
     let now = chrono::Utc::now().timestamp_millis().to_string();
     let value = now.as_bytes().to_vec();

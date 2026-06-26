@@ -38,7 +38,12 @@ impl QuadShardManager {
 
     /// 仅计算路径，不打开 DB（用于测试和日志）
     /// `epoch` 是版本号/桶名，由客户端传入
-    pub fn route_paths(&self, epoch: &str, quadkey: &str, level: u32) -> (String, PathBuf, PathBuf) {
+    pub fn route_paths(
+        &self,
+        epoch: &str,
+        quadkey: &str,
+        level: u32,
+    ) -> (String, PathBuf, PathBuf) {
         let db_name = if level <= self.config.base_level {
             "base".to_string()
         } else if level < self.config.split_level {
@@ -142,7 +147,13 @@ impl QuadShardManager {
     }
 
     /// 读取对象
-    pub fn get(&self, epoch: &str, quadkey: &str, level: u32, key: &str) -> Result<(Bytes, ObjectMeta)> {
+    pub fn get(
+        &self,
+        epoch: &str,
+        quadkey: &str,
+        level: u32,
+        key: &str,
+    ) -> Result<(Bytes, ObjectMeta)> {
         let shard = self.route(epoch, quadkey, level)?;
         let value = shard
             .kv_store

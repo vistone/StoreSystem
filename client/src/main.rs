@@ -57,12 +57,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 测试 3: 单区域高压写入
     // ============================================================
     print_separator("测试 3: 单区域高压写入（50并发×1000条×1KB，每个区域独立测试）");
-    for region in &["0", "1", "2", "3"] {
-        let (avg, total, ok, fail) = grpc.region_stress_put(region, 1000, 50, 1024).await;
-        print_result(
-            &format!("区域 {} 高压写入", region),
-            avg, total, ok, fail,
-        );
+    for ridx in 0..4u32 {
+        let quadkey = format!("{:04}", ridx);
+        let region = format!("{}", ridx);
+        let (avg, total, ok, fail) = grpc.region_stress_put(&quadkey, 1000, 50, 1024).await;
+        print_result(&format!("区域 {} 高压写入", region), avg, total, ok, fail);
     }
 
     // ============================================================
@@ -90,13 +89,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "  读: 平均={:.2}ms, 成功={}, {:.0} ops/s",
         read_avg,
         read_ok,
-        if total_sec > 0.0 { read_ok as f64 / total_sec } else { 0.0 }
+        if total_sec > 0.0 {
+            read_ok as f64 / total_sec
+        } else {
+            0.0
+        }
     );
     println!(
         "  写: 平均={:.2}ms, 成功={}, {:.0} ops/s",
         write_avg,
         write_ok,
-        if total_sec > 0.0 { write_ok as f64 / total_sec } else { 0.0 }
+        if total_sec > 0.0 {
+            write_ok as f64 / total_sec
+        } else {
+            0.0
+        }
     );
     println!("  总耗时: {:.2}s", total_sec);
 
