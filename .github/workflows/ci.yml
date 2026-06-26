@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ["main", "copilot/**"]
+    branches: ["main"]
   pull_request:
     branches: ["main"]
 
@@ -39,11 +39,17 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Check formatting
-        run: cargo fmt -- --check
+      - name: Check formatting (all crates)
+        run: cargo fmt --all -- --check
 
-      - name: Run clippy
-        run: cargo clippy -- -D warnings
+      - name: Run clippy (all crates, warnings as errors)
+        run: cargo clippy --all -- -D warnings
 
-      - name: Run tests
-        run: cargo test
+      - name: Build release (all crates)
+        run: cargo build --release --all
+
+      - name: Run tests (all crates)
+        run: cargo test --all
+
+      - name: Clean test data
+        run: rm -rf master_data worker_data data shard_data quad_data data_sa

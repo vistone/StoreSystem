@@ -11,6 +11,8 @@
 5. **设计文档先行。** 任何新功能必须先写 `docs/superpowers/specs/` 设计文档。
 6. **淘汰只限于设计真正不合理时。** 在 commit 中论证"为什么必须废弃"。
 7. **文档代码同步。** 每次提交前 README.md 必须与代码同步，禁止代码和文档不一致。
+8. **CI 门禁必须先过。** 任何提交前必须通过 `make ci`（fmt + clippy + build + test），违反者不得提交。
+9. **禁止私自改规则。** 修改分片策略、路由逻辑、存储格式等核心规则，必须先走设计文档审批。
 
 ## 技能工作流
 
@@ -35,19 +37,24 @@
 - 公共 API 必须有文档注释
 
 ### 测试要求
-- 编译: `cargo build --release` 必须 exit 0
-- 单元测试: `cargo test` 必须全部通过
+- 编译: `cargo build --release --all` 必须 exit 0
+- 代码格式: `cargo fmt --all -- --check` 必须通过
+- Clippy: `cargo clippy --all -- -D warnings` 必须 0 错误
+- 单元测试: `cargo test --all` 必须全部通过
 - 集成测试: `make test-fault` 必须全部通过
 - 数据清理: 每次测试后 `make clean-data`
+- **提交前必须: `make ci` 全部通过**
 
 ### 版本管理
 - 版本号遵循 `v0.1.X`，最小变动 +1
-- `Cargo.toml` + `client/Cargo.toml` 版本号同步
+- `Cargo.toml` + `client/Cargo.toml` + `guardian/Cargo.toml` 版本号同步
 - README.md 必须与代码同步更新
 - 每个 tag 有完整的 release note
 
 ### 禁止事项
+- 禁止 CI 未通过就提交（`make ci` 必须全绿）
 - 禁止在测试通过前提交
 - 禁止留下测试数据
 - 禁止使用 Python/Shell 写测试（用 Rust）
 - 禁止不经验证声称"完成"
+- 禁止未经设计文档审批修改核心规则（分片策略、路由逻辑、存储格式）

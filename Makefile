@@ -1,6 +1,21 @@
-.PHONY: all build build-server build-client build-guardian clean clean-data clean-all test test-fault
+.PHONY: all build build-server build-client build-guardian clean clean-data clean-all test test-fault ci
 
 all: build
+
+# ============================================================
+# CI 门禁（与 GitHub Actions 一致，提交前必须通过）
+# ============================================================
+ci:
+	@echo "=== 1/4 cargo fmt --all -- --check ==="
+	cargo fmt --all -- --check
+	@echo "=== 2/4 cargo clippy --all -- -D warnings ==="
+	cargo clippy --all -- -D warnings
+	@echo "=== 3/4 cargo build --release --all ==="
+	cargo build --release --all
+	@echo "=== 4/4 cargo test --all ==="
+	cargo test --all
+	@echo ""
+	@echo "✅ CI 门禁全部通过"
 
 # 编译 server、client 和 guardian，并将可执行文件输出到 bin/ 目录
 build: build-server build-client build-guardian
