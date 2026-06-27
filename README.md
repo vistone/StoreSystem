@@ -1,6 +1,6 @@
 # Store System
 
-**版本**: 0.1.10
+**版本**: 0.1.11
 
 一个高性能的嵌入式键值存储系统，基于 bbolt (jammdb) + SQLite 双存储引擎，提供 gRPC 和 RESTful 双接口，支持写合并优化、WAL 原子写入、副本故障转移、进程守护自愈和大 Value（最大 100MB）读写。
 
