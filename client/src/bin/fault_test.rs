@@ -7,9 +7,54 @@
 #[path = "../grpc_client.rs"]
 mod grpc_client;
 use grpc_client::GrpcClient;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+const WORKER_2_CONFIG: &str = "worker-2.yaml";
+
+fn store_system_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let exe_name = if cfg!(windows) {
+        "store_system.exe"
+    } else {
+        "store_system"
+    };
+    let current = std::env::current_exe()?;
+    let bin_dir = current
+        .parent()
+        .ok_or_else(|| "无法定位 fault_test 所在目录".to_string())?;
+    Ok(bin_dir.join(exe_name))
+}
+
+fn kill_worker_2() {
+    #[cfg(windows)]
+    {
+        let script = format!(
+            "Get-CimInstance Win32_Process | Where-Object {{ $_.Name -like 'store_system*' -and $_.CommandLine -like '*{}*' }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}",
+            WORKER_2_CONFIG
+        );
+        let _ = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", &script])
+            .output();
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = std::process::Command::new("pkill")
+            .args(["-9", "-f", WORKER_2_CONFIG])
+            .output();
+    }
+}
+
+fn restart_worker_2() -> Result<(), Box<dyn std::error::Error>> {
+    std::process::Command::new(store_system_path()?)
+        .args(["--config", WORKER_2_CONFIG])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+    Ok(())
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -56,10 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     println!("💀 杀死 Worker-2...");
-    std::process::Command::new("pkill")
-        .args(["-9", "-f", "worker2\\.yaml"])
-        .output()
-        .ok();
+    kill_worker_2();
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // 立即尝试读取阶段 1 的所有数据
@@ -142,11 +184,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 阶段 4: 重启 Worker-2
     // ============================================================
     println!("\n━ 阶段 4: 重启 Worker-2 ━━");
-    let _ = std::process::Command::new("/home/stone/StoreSystem/target/release/store_system")
-        .args(["--config", "worker2.yaml"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
+    restart_worker_2()?;
     tokio::time::sleep(Duration::from_secs(5)).await;
 
     // ============================================================

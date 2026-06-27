@@ -602,6 +602,16 @@ fn derive_master_ws_addr(master_addr: &str) -> String {
     format!("{}:50053", host)
 }
 
+fn advertise_addr(listen_addr: &str) -> String {
+    match listen_addr.parse::<std::net::SocketAddr>() {
+        Ok(addr) if addr.ip().is_unspecified() => match addr {
+            std::net::SocketAddr::V4(v4) => format!("127.0.0.1:{}", v4.port()),
+            std::net::SocketAddr::V6(v6) => format!("[::1]:{}", v6.port()),
+        },
+        _ => listen_addr.to_string(),
+    }
+}
+
 /// 注册 Worker 到 Master
 async fn register_with_master(
     master_addr: &str,
@@ -618,7 +628,7 @@ async fn register_with_master(
 
     let request = tonic::Request::new(store_system::grpc::proto::RegisterWorkerRequest {
         worker_id: worker_id.to_string(),
-        address: listen_addr.to_string(),
+        address: advertise_addr(listen_addr),
         weight: 1,
         tags: std::collections::HashMap::new(),
         region: String::new(), // region 由 Master 根据 worker_regions 分配
@@ -631,6 +641,21 @@ async fn register_with_master(
     response
         .config
         .ok_or_else(|| "Master 未返回 WorkerConfig".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn advertise_addr_converts_unspecified_ipv4_to_loopback() {
+        assert_eq!(advertise_addr("0.0.0.0:50061"), "127.0.0.1:50061");
+    }
+
+    #[test]
+    fn advertise_addr_keeps_specific_address() {
+        assert_eq!(advertise_addr("192.168.1.10:50061"), "192.168.1.10:50061");
+    }
 }
 
 /// 发送心跳到 Master（携带系统健康信息）

@@ -134,10 +134,10 @@ cargo build --release -p store_guardian  # guardian
 | 节点 | region | gRPC | RESTful | 负责数据 |
 |------|:------:|------|---------|---------|
 | Master | — | 50051 | — | 路由分流 |
-| Worker-0 | 0 | 50061 | 52061 | quadkey 0xxx |
-| Worker-1 | 1 | 50062 | 52062 | quadkey 1xxx |
-| Worker-2 | 2 | 50063 | 52063 | quadkey 2xxx |
-| Worker-3 | 3 | 50064 | 52064 | quadkey 3xxx |
+| Worker-0 | 0 | 50161 | 52161 | quadkey 0xxx |
+| Worker-1 | 1 | 50162 | 52162 | quadkey 1xxx |
+| Worker-2 | 2 | 50163 | 52163 | quadkey 2xxx |
+| Worker-3 | 3 | 50164 | 52164 | quadkey 3xxx |
 
 ### 进程守护启动（自动拉起 + 假死检测）
 
@@ -437,7 +437,7 @@ global:
   protocol: "both"
 worker:
   worker_id: "worker-0"            # 唯一标识
-  listen_addr: "0.0.0.0:50061"     # gRPC 监听地址
+  listen_addr: "0.0.0.0:50161"     # gRPC 监听地址
   master_addr: "http://127.0.0.1:50051"  # Master 地址
   data_dir: "worker_data/worker-0" # 数据目录
   # 其余配置（kv_ext, meta_ext, cache_size, flush_interval_ms,
@@ -480,7 +480,7 @@ Master 通过日志 WebSocket 连接的反向通道推送配置更新：
 # 全量单元测试
 cargo test                    # server + library (37 tests)
 cargo test -p store_guardian  # guardian (8 tests)
-cargo test --all              # 全部 (45 tests)
+cargo test --all              # 全部 (47 tests)
 
 # 集成测试
 make test       # 启动集群 + 性能测试

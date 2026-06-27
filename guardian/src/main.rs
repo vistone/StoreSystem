@@ -76,7 +76,7 @@ async fn main() -> anyhow::Result<()> {
 
         // 等待依赖进程 Running
         if let Some(ref dep) = proc.config.depends_on {
-            if let Some(dep_proc) = guarded.get(dep) {
+            if let Some(dep_proc) = guarded.get_mut(dep) {
                 eprintln!("[guardian] {} 等待依赖 {} 就绪...", name, dep);
                 wait_for_running(dep_proc, &settings).await;
             }
@@ -85,7 +85,7 @@ async fn main() -> anyhow::Result<()> {
         proc.spawn()?;
         // 等待自身健康
         eprintln!("[guardian] 等待 {} 健康检查...", name);
-        wait_for_running(&proc, &settings).await;
+        wait_for_running(&mut proc, &settings).await;
         guarded.insert(name.clone(), proc);
     }
 
@@ -221,16 +221,14 @@ fn topological_sort(processes: &BTreeMap<String, config::ProcessConfig>) -> Vec<
 }
 
 /// 等待进程变为 Running 状态
-async fn wait_for_running(proc: &GuardedProcess, settings: &config::GuardianSettings) {
+async fn wait_for_running(proc: &mut GuardedProcess, settings: &config::GuardianSettings) {
     let is_master = proc.name == "master";
     let timeout = settings.probe_timeout_secs;
 
     for attempt in 0..30 {
-        if let Some(pid) = proc.pid {
-            if !std::path::Path::new(&format!("/proc/{}", pid)).exists() {
-                eprintln!("[guardian] {} PID={} 已退出", proc.name, pid);
-                return;
-            }
+        if !proc.is_pid_alive() {
+            eprintln!("[guardian] {} 进程已退出", proc.name);
+            return;
         }
 
         let health_addr = &proc.config.health_grpc;

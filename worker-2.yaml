@@ -7,6 +7,6 @@ global:
   protocol: "both"
 worker:
   worker_id: "worker-2"
-  listen_addr: "0.0.0.0:50063"
+  listen_addr: "0.0.0.0:50163"
   master_addr: "http://127.0.0.1:50051"
   data_dir: "worker_data/worker-2"

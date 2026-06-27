@@ -74,27 +74,31 @@ impl GuardedProcess {
         Ok(())
     }
 
-    /// kill -9 进程
+    /// 强制终止进程
     pub fn kill(&mut self) {
-        if let Some(pid) = self.pid {
-            let _ = Command::new("kill").args(["-9", &pid.to_string()]).output();
-            eprintln!("[guardian] {} (PID={}) 已强制终止", self.name, pid);
-        }
-        // 回收子进程
         if let Some(ref mut child) = self.child {
+            let pid = child.id();
+            let _ = child.kill();
             let _ = child.wait();
+            eprintln!("[guardian] {} (PID={}) 已强制终止", self.name, pid);
         }
         self.pid = None;
         self.child = None;
     }
 
-    /// 检查 PID 是否存活
-    pub fn is_pid_alive(&self) -> bool {
-        if let Some(pid) = self.pid {
-            // 检查 /proc/{pid} 是否存在 (Linux)
-            std::path::Path::new(&format!("/proc/{}", pid)).exists()
-        } else {
-            false
+    /// 检查被守护子进程是否仍在运行
+    pub fn is_pid_alive(&mut self) -> bool {
+        let Some(child) = self.child.as_mut() else {
+            return false;
+        };
+
+        match child.try_wait() {
+            Ok(None) => true,
+            Ok(Some(_)) | Err(_) => {
+                self.pid = None;
+                self.child = None;
+                false
+            }
         }
     }
 
@@ -114,9 +118,18 @@ mod tests {
     use crate::config::ProcessConfig;
 
     fn test_config() -> ProcessConfig {
+        #[cfg(windows)]
+        let (path, args) = (
+            "cmd".to_string(),
+            vec!["/C".to_string(), "ping -n 6 127.0.0.1 > nul".to_string()],
+        );
+
+        #[cfg(not(windows))]
+        let (path, args) = ("sleep".to_string(), vec!["5".to_string()]);
+
         ProcessConfig {
-            path: "true".to_string(),
-            args: vec![],
+            path,
+            args,
             env: Default::default(),
             health_grpc: String::new(),
             depends_on: None,

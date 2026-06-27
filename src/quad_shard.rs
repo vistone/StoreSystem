@@ -217,8 +217,8 @@ mod tests {
         let mgr = QuadShardManager::new(test_config()).unwrap();
         let (db_name, kv_path, _meta_path) = mgr.route_paths("v1", "30211", 5);
         assert_eq!(db_name, "base");
-        assert!(kv_path.to_string_lossy().contains("v1/base.kv"));
-        assert!(!kv_path.to_string_lossy().contains("/5/"));
+        assert!(kv_path.ends_with(Path::new("v1").join("base.kv")));
+        assert!(!kv_path.components().any(|c| c.as_os_str() == "5"));
     }
 
     #[test]
@@ -226,7 +226,7 @@ mod tests {
         let mgr = QuadShardManager::new(test_config()).unwrap();
         let (db_name, kv_path, _meta_path) = mgr.route_paths("v1", "302112345678", 12);
         assert_eq!(db_name, "3021");
-        assert!(kv_path.to_string_lossy().contains("v1/12/3021.kv"));
+        assert!(kv_path.ends_with(Path::new("v1").join("12").join("3021.kv")));
     }
 
     #[test]
@@ -234,7 +234,7 @@ mod tests {
         let mgr = QuadShardManager::new(test_config()).unwrap();
         let (db_name, kv_path, _meta_path) = mgr.route_paths("v1", "30211234567890123456", 20);
         assert_eq!(db_name, "30211234");
-        assert!(kv_path.to_string_lossy().contains("v1/20/30211234.kv"));
+        assert!(kv_path.ends_with(Path::new("v1").join("20").join("30211234.kv")));
     }
 
     #[test]
