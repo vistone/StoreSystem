@@ -62,16 +62,17 @@ test: build
 	mkdir -p master_data worker_data/worker-0 worker_data/worker-1 worker_data/worker-2 worker_data/worker-3
 	$(STORE_SYSTEM) --config master.yaml > /dev/null 2>&1 &
 	@sleep 3
-	$(STORE_SYSTEM) --config worker-0.yaml > /dev/null 2>&1 &
-	$(STORE_SYSTEM) --config worker-1.yaml > /dev/null 2>&1 &
-	$(STORE_SYSTEM) --config worker-2.yaml > /dev/null 2>&1 &
-	$(STORE_SYSTEM) --config worker-3.yaml > /dev/null 2>&1 &
-	@sleep 5
-	@echo "=== 运行性能测试 ==="
-	cd client && ../$(STORE_CLIENT)
-	@echo "=== 清理 ==="
-	-$(MAKE) clean-data
-	@echo "✅ 测试完成，数据已清理"
+		$(STORE_SYSTEM) --config worker-0.yaml > /dev/null 2>&1 &
+		$(STORE_SYSTEM) --config worker-1.yaml > /dev/null 2>&1 &
+		$(STORE_SYSTEM) --config worker-2.yaml > /dev/null 2>&1 &
+		$(STORE_SYSTEM) --config worker-3.yaml > /dev/null 2>&1 &
+		@sleep 5
+		@echo "=== 运行性能测试 ==="
+		cd client && ../$(STORE_CLIENT)
+		@echo "=== 清理：杀掉所有 store_system 进程 ==="
+		-pkill -9 -f store_system 2>/dev/null; true
+		@sleep 1
+		@echo "✅ 测试完成，数据已清理"
 
 # 故障恢复测试
 test-fault: build
@@ -79,16 +80,17 @@ test-fault: build
 	mkdir -p master_data worker_data/worker-0 worker_data/worker-1 worker_data/worker-2 worker_data/worker-3
 	$(STORE_SYSTEM) --config master.yaml > /dev/null 2>&1 &
 	@sleep 3
-	$(STORE_SYSTEM) --config worker-0.yaml > /dev/null 2>&1 &
-	$(STORE_SYSTEM) --config worker-1.yaml > /dev/null 2>&1 &
-	$(STORE_SYSTEM) --config worker-2.yaml > /dev/null 2>&1 &
-	$(STORE_SYSTEM) --config worker-3.yaml > /dev/null 2>&1 &
-	@sleep 5
-	@echo "=== 运行故障恢复测试 ==="
-	$(FAULT_TEST)
-	@echo "=== 清理 ==="
-	-$(MAKE) clean-data
-	@echo "✅ 故障测试完成，数据已清理"
+		$(STORE_SYSTEM) --config worker-0.yaml > /dev/null 2>&1 &
+		$(STORE_SYSTEM) --config worker-1.yaml > /dev/null 2>&1 &
+		$(STORE_SYSTEM) --config worker-2.yaml > /dev/null 2>&1 &
+		$(STORE_SYSTEM) --config worker-3.yaml > /dev/null 2>&1 &
+		@sleep 5
+		@echo "=== 运行故障恢复测试 ==="
+		$(FAULT_TEST)
+		@echo "=== 清理：杀掉所有 store_system 进程 ==="
+		-pkill -9 -f store_system 2>/dev/null; true
+		@sleep 1
+		-$(MAKE) clean-data
 
 # ============================================================
 # 清理
@@ -101,14 +103,11 @@ clean:
 
 # 清理所有测试数据（数据库文件 + 临时日志）
 clean-data:
-ifeq ($(OS),Windows_NT)
-	-powershell -NoProfile -Command 'Get-CimInstance Win32_Process | Where-Object { $$_.Name -like "store_system*" } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force }'
-else
-	-pgrep -f "/bin/store_system" | xargs -r kill 2>/dev/null; true
-endif
-	@sleep 1
-	-rm -rf master_data worker_data data shard_data quad_data data_sa
-	@echo "✅ 测试数据已清理"
+		echo "=== 清理数据 ==="
+		-rm -rf master_data worker_data data shard_data quad_data data_sa
+		-pkill -9 -f store_system 2>/dev/null; true
+		@sleep 1
+		@echo "✅ 测试数据已清理"
 
 # 深度清理（数据 + 编译缓存）
 clean-all: clean-data

@@ -32,13 +32,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         i += 1;
     }
 
-    let config = AppConfig::from_file(&config_path).unwrap_or_else(|e| {
-        eprintln!("[Config] 配置加载失败: {}，使用默认配置", e);
-        AppConfig::default()
-    });
+    let config = match AppConfig::from_file(&config_path) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            eprintln!("❌ 配置加载失败: {}", e);
+            eprintln!("   请检查配置文件路径: {}", config_path);
+            return Err(Box::<dyn std::error::Error>::from(format!(
+                "配置文件不存在或格式错误: {}",
+                e
+            )));
+        }
+    };
 
     // 确定运行模式：命令行 > 配置文件
     let mode = mode.unwrap_or_else(|| config.mode.clone());
+
+    // 注册 SIGTERM/SIGINT 信号处理，确保进程能被外部 kill 正常终止
+    let mode_clone = mode.clone();
+    tokio::spawn(async move {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            eprintln!("[Signal] 信号注册失败: {}", e);
+            return;
+        }
+        eprintln!("\n[SIGINT/SIGTERM] 收到终止信号，{} 节点退出", mode_clone);
+        std::process::exit(0);
+    });
 
     match mode.as_str() {
         "master" => run_master(&config).await,

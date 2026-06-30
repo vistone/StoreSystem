@@ -597,7 +597,11 @@ impl WorkerLogger {
     where
         F: Fn(String) + Send + Sync + 'static,
     {
-        *self.config_update_handler.lock().unwrap() = Some(Box::new(handler));
+        if let Ok(mut guard) = self.config_update_handler.lock() {
+            *guard = Some(Box::new(handler));
+        } else {
+            eprintln!("[WorkerLogger] 设置 config_update_handler 失败: Mutex 已中毒");
+        }
         self
     }
 
@@ -799,10 +803,10 @@ impl WorkerLogger {
                                         .unwrap_or(false);
 
                                 if is_config_update {
-                                    if let Some(handler) =
-                                        self.config_update_handler.lock().unwrap().as_ref()
-                                    {
-                                        handler(text);
+                                    if let Ok(guard) = self.config_update_handler.lock() {
+                                        if let Some(handler) = guard.as_ref() {
+                                            handler(text);
+                                        }
                                     }
                                 }
                                 // 其他消息（日志 ACK 等）丢弃

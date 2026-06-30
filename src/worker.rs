@@ -1,4 +1,4 @@
-use crate::error::Result;
+use crate::error::{Result, StoreError};
 use bytes::Bytes;
 use chrono::Utc;
 use dashmap::DashMap;
@@ -417,10 +417,15 @@ impl WorkerNode {
 
         let write_buffer = Arc::new(WriteBuffer::new());
 
-        let quad_shard = config
-            .quad_shard_config
-            .as_ref()
-            .map(|qc| Arc::new(QuadShardManager::new(qc.clone()).expect("QuadShardManager init")));
+        let quad_shard = match config.quad_shard_config.as_ref() {
+            Some(qc) => {
+                let qsm = QuadShardManager::new(qc.clone()).map_err(|e| {
+                    StoreError::InvalidArgument(format!("QuadShardManager 初始化失败: {}", e))
+                })?;
+                Some(Arc::new(qsm))
+            }
+            None => None,
+        };
 
         Ok(Self {
             config,

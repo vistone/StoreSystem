@@ -1,6 +1,4 @@
-# Worker-0 — 极简启动配置
-# region 由 Master 根据 master.yaml 的 worker_regions 分配
-# 其余配置（扩展名、性能参数、quad_shard）由 Master 注册时下发
+# Worker — 极简启动配置（默认 worker.yaml）
 mode: worker
 global:
   max_message_size: 268435456
